@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ES2022"],
+    "paths": {
+      "@loupe/core": ["../../packages/core/src/index.ts"],
+      "@loupe/core/model": ["../../packages/core/src/model.ts"]
+    }
+  },
+  "include": ["src"]
+}

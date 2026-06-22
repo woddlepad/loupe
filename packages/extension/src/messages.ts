@@ -1,0 +1,74 @@
+import type {
+  ActionDescriptor,
+  Annotation,
+  AnnotationTarget,
+  AnnotatePayload,
+  AnnotationComment,
+  Rect,
+} from "@loupe/core/model";
+
+/** Messages exchanged between the content script and the background worker. */
+export type LoupeMessage =
+  | { type: "toggle" }
+  | { type: "toggle-view" }
+  | { type: "popup-annotate" }
+  | { type: "popup-view" }
+  | { type: "actions" }
+  | { type: "groups" }
+  | { type: "list" }
+  | { type: "capture"; rect: Rect; devicePixelRatio: number }
+  | { type: "annotate"; payload: AnnotatePayload }
+  | { type: "update-annotation"; id: string; patch: { note?: string } }
+  | { type: "add-reference"; id: string; reference: { caption?: string; dataUrl: string } }
+  | { type: "comment"; id: string; comment: AnnotationComment }
+  | { type: "delete-annotation"; id: string }
+  | { type: "delete-resolved" }
+  | { type: "create-group"; group: string }
+  | { type: "rename-group"; slug: string; group: string }
+  | { type: "delete-group"; slug: string }
+  | { type: "move-annotation"; id: string; group: string }
+  | { type: "reorder-groups"; slugs: string[] }
+  | { type: "group-run"; slug: string; action: string }
+  | { type: "resolve-target"; target: AnnotationTarget }
+  | { type: "references" }
+  | { type: "save-reference"; annotation: Annotation };
+
+export interface ReferenceItem {
+  id: string;
+  url?: string;
+  title?: string;
+  note?: string;
+  dir: string;
+}
+
+export interface GroupSummary {
+  group: string;
+  slug: string;
+  count: number;
+  open: number;
+}
+
+/** An annotation as stored on disk (adds dir + groupSlug + comments). */
+export interface StoredAnnotation extends Annotation {
+  dir: string;
+  groupSlug: string;
+}
+
+export type ActionsResult =
+  | { ok: true; actions: ActionDescriptor[] }
+  | { ok: false; error: string };
+export type GroupsResult = { ok: true; groups: GroupSummary[] } | { ok: false; error: string };
+export type ListResult =
+  | { ok: true; annotations: StoredAnnotation[] }
+  | { ok: false; error: string };
+export type ReferencesResult =
+  | { ok: true; references: ReferenceItem[] }
+  | { ok: false; error: string };
+export type SimpleResult = { ok: true; detail?: string } | { ok: false; error: string };
+export type CaptureResult = { ok: true; dataUrl: string } | { ok: false; error: string };
+export type ResolveResult =
+  | { ok: true; source: string | null; candidates: string[]; method: string }
+  | { ok: false; error: string };
+export type AnnotateResult =
+  | { ok: true; id: string; dir: string; results: Record<string, { ok: boolean; detail?: string; url?: string }> }
+  | { ok: false; error: string };

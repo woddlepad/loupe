@@ -1,0 +1,21 @@
+{
+  "name": "@loupe/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model": "./src/model.ts"
+  },
+  "scripts": {
+    "build": "echo '@loupe/core is consumed as source; nothing to build'",
+    "type-check": "tsc --noEmit",
+    "test": "echo 'no @loupe/core tests yet (DOM-bound); covered via the bridge + manual e2e'"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "lucide": "^1.21.0"
+  }
+}

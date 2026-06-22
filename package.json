@@ -1,0 +1,64 @@
+{
+  "name": "@woddlepad/loupe",
+  "version": "0.1.0",
+  "description": "Drag-select a region of any running UI, identify the component, attach a note, and hand it to an agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/woddlepad/loupe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/woddlepad/loupe/issues"
+  },
+  "homepage": "https://github.com/woddlepad/loupe#readme",
+  "keywords": [
+    "browser-extension",
+    "chrome-extension",
+    "codex",
+    "claude",
+    "ui-feedback",
+    "annotations"
+  ],
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "loupe": "./apps/bridge/dist/loupe.js",
+    "loupe-bridge": "./apps/bridge/dist/cli.js"
+  },
+  "files": [
+    "apps/bridge/dist",
+    "commands/claude",
+    "docs/custom-actions.md",
+    "docs/privacy.md",
+    "skills/loupe",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:extension": "pnpm --filter @loupe/extension build",
+    "build:firefox": "pnpm --filter @loupe/extension build:firefox",
+    "install:cli": "pnpm --filter @loupe/bridge build && mkdir -p ~/.local/bin && ln -sf \"$PWD/apps/bridge/dist/loupe.js\" ~/.local/bin/loupe && ln -sf \"$PWD/apps/bridge/dist/cli.js\" ~/.local/bin/loupe-bridge",
+    "install:skill": "rm -rf ~/.codex/skills/loupe && mkdir -p ~/.codex/skills ~/.claude/commands && cp -R skills/loupe ~/.codex/skills/loupe && chmod +x ~/.codex/skills/loupe/scripts/loupe_context.py && cp commands/claude/loupe.md ~/.claude/commands/loupe.md",
+    "package:extension": "pnpm build:extension && node scripts/package-extension.mjs",
+    "package:firefox": "pnpm build:firefox && node scripts/package-firefox.mjs",
+    "prepack": "pnpm --filter @loupe/bridge build",
+    "pack:npm": "mkdir -p artifacts && npm pack --pack-destination artifacts",
+    "release:check": "pnpm type-check && pnpm test && pnpm package:extension && pnpm package:firefox && npm pack --dry-run",
+    "store:assets": "node scripts/generate-store-assets.mjs",
+    "bridge": "pnpm --filter @loupe/bridge start",
+    "type-check": "pnpm -r type-check",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

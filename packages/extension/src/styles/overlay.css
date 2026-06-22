@@ -1,0 +1,67 @@
+/* Compiled by the build into a string injected into the overlay's shadow root.
+ * Tailwind scans the core + extension TS for class names used in the overlays. */
+@import "tailwindcss";
+
+@source "../**/*.{ts,tsx,html}";
+@source "../../../core/src/**/*.ts";
+
+/* Loupe tokens: black glassy panels, white controls, and monochrome selection
+ * chrome. */
+@theme {
+  --color-loupe-bg: #050505;
+  --color-loupe-panel: #101010;
+  --color-loupe-elev: #1a1a1a;
+  --color-loupe-line: rgba(255, 255, 255, 0.08);
+  --color-loupe-line-strong: rgba(255, 255, 255, 0.14);
+  --color-loupe-fg: #f8f8f8;
+  --color-loupe-muted: #b5b5b5;
+  --color-loupe-faint: #777777;
+  --color-loupe-accent: #f8f8f8;
+  --color-loupe-accent-hover: #d7d7d7;
+  --radius-loupe: 12px;
+}
+
+/* The host element should not inherit page styles; Tailwind preflight handles
+ * the rest inside the shadow root. */
+:host {
+  all: initial;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Polish animations. Defined as plain CSS so they survive Tailwind's tree-shake
+ * (utility scanning won't see these class names used from generated DOM). */
+@keyframes loupe-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes loupe-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.loupe-animate-panel {
+  animation: loupe-panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: top center;
+}
+
+.loupe-animate-fade {
+  animation: loupe-fade-in 220ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loupe-animate-panel,
+  .loupe-animate-fade {
+    animation: none;
+  }
+}

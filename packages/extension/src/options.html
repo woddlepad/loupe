@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Loupe — settings</title>
+    <link rel="stylesheet" href="pages.css" />
+  </head>
+  <body class="p-8">
+    <div class="mx-auto max-w-[460px]">
+      <h1 class="text-[18px] font-semibold">Loupe</h1>
+      <p class="text-loupe-muted text-[13px] mt-1 mb-5">where annotations go, and who picks them up.</p>
+
+      <label for="bridgeUrl" class="block text-[12px] text-loupe-muted mb-1.5 mt-4">Bridge daemon URL</label>
+      <input
+        id="bridgeUrl"
+        type="text"
+        placeholder="http://localhost:7337 or http://my-mac.tailnet.ts.net:7337"
+        class="w-full box-border rounded-lg bg-loupe-panel border border-loupe-line text-loupe-fg text-[13px] px-2.5 py-2 outline-none focus:border-loupe-accent/60"
+      />
+      <p class="text-loupe-faint text-[11px] mt-1.5">
+        local setup:
+        <code class="font-mono text-loupe-muted">loupe init</code>
+        then
+        <code class="font-mono text-loupe-muted">loupe bridge</code>
+        · remote:
+        <code class="font-mono text-loupe-muted">loupe bridge --repo ~/dev/app --host 0.0.0.0</code>
+      </p>
+
+      <label for="bridgeRoutes" class="block text-[12px] text-loupe-muted mb-1.5 mt-4">Bridge routes</label>
+      <textarea
+        id="bridgeRoutes"
+        rows="3"
+        placeholder="mac-studio*.ts.net http://mac-studio.tailnet.ts.net:7337&#10;*.mac-studio.local http://mac-studio.local:7337"
+        class="w-full box-border rounded-lg bg-loupe-panel border border-loupe-line text-loupe-fg text-[12px] font-mono px-2.5 py-2 outline-none focus:border-loupe-accent/60 resize-y"
+      ></textarea>
+      <p class="text-loupe-faint text-[11px] mt-1.5">
+        first match wins. pages that do not match a route use the default bridge URL above.
+      </p>
+
+      <div
+        id="daemonStatus"
+        class="mt-3 rounded-lg bg-loupe-panel/60 border border-loupe-line p-3 text-[12px] text-loupe-muted whitespace-pre-line"
+      ></div>
+
+      <label for="author" class="block text-[12px] text-loupe-muted mb-1.5 mt-4">Your name (on comments)</label>
+      <input
+        id="author"
+        type="text"
+        placeholder="me"
+        class="w-full box-border rounded-lg bg-loupe-panel border border-loupe-line text-loupe-fg text-[13px] px-2.5 py-2 outline-none focus:border-loupe-accent/60"
+      />
+      <p class="text-loupe-faint text-[11px] mt-1.5">
+        actions in the panel are advertised by the daemon (save, agents, integrations, custom).
+      </p>
+
+      <label for="projectOrigins" class="block text-[12px] text-loupe-muted mb-1.5 mt-4">Project origins</label>
+      <textarea
+        id="projectOrigins"
+        rows="4"
+        placeholder="localhost&#10;*.my-tailnet.ts.net&#10;staging.acme.com"
+        class="w-full box-border rounded-lg bg-loupe-panel border border-loupe-line text-loupe-fg text-[12px] font-mono px-2.5 py-2 outline-none focus:border-loupe-accent/60 resize-y"
+      ></textarea>
+      <p class="text-loupe-faint text-[11px] mt-1.5">
+        one host pattern per line — these count as "your app" (annotations map to source).
+        supports ports, remote hosts, and wildcards (e.g. localhost:5173 or a Tailscale tailnet).
+        anything else becomes a reference capture.
+      </p>
+
+      <div class="mt-6 rounded-lg bg-loupe-panel/60 border border-loupe-line p-3 text-[12px] text-loupe-muted">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="text-loupe-fg font-medium text-[12px]">Shortcuts</div>
+          <button
+            id="openShortcuts"
+            type="button"
+            class="ml-auto rounded-md bg-loupe-fg text-loupe-bg text-[11px] font-medium px-2.5 py-1 cursor-pointer hover:bg-white"
+          >
+            Open shortcuts
+          </button>
+        </div>
+        <div id="shortcuts" class="space-y-1.5"></div>
+        <p class="text-loupe-faint text-[11px] mt-2">
+          Chrome owns extension shortcut editing. Use the shortcut editor to change or clear these keys.
+        </p>
+      </div>
+
+      <div class="text-loupe-muted text-[12px] h-4 mt-3" id="saved"></div>
+    </div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Loupe",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Drag-select a region, identify the component, attach a note, hand it to an agent.",
+  "permissions": ["activeTab", "clipboardWrite", "scripting", "storage", "tabs"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "Loupe"
+  },
+  "commands": {
+    "toggle-loupe": {
+      "suggested_key": { "default": "Alt+A" },
+      "description": "Toggle Loupe annotation mode"
+    },
+    "toggle-view": {
+      "suggested_key": { "default": "Alt+Shift+A" },
+      "description": "Toggle Loupe viewer (annotations + comments)"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

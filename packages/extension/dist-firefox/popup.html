@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Loupe</title>
+    <link rel="stylesheet" href="pages.css" />
+  </head>
+  <body class="p-3.5 w-[240px] rounded-loupe">
+    <div class="flex items-center gap-2 mb-1">
+      <img src="icons/icon48.png" alt="" class="w-7 h-7 rounded-lg" />
+      <h1 class="text-[14px] font-semibold">Loupe</h1>
+    </div>
+    <p class="text-loupe-muted text-[12px] mb-3">drag-select a region, attach a note, hand it off.</p>
+
+    <div id="projectPanel" class="mb-3 rounded-lg bg-loupe-panel/70 border border-loupe-line p-2.5">
+      <label for="activeProject" class="block text-[11px] text-loupe-faint mb-1">annotations save to</label>
+      <select
+        id="activeProject"
+        class="w-full box-border rounded-md bg-loupe-bg border border-loupe-line text-loupe-fg text-[12px] px-2 py-1.5 outline-none focus:border-loupe-accent/60"
+      >
+        <option>checking projects...</option>
+      </select>
+      <div id="projectStatus" class="text-loupe-muted text-[11px] leading-snug mt-1.5 whitespace-pre-line"></div>
+    </div>
+
+    <button
+      id="annotate"
+      class="w-full rounded-lg bg-loupe-fg hover:bg-white text-loupe-bg font-semibold text-[13px] py-2.5 cursor-pointer transition-colors"
+    >
+      start annotating
+    </button>
+    <button
+      id="view"
+      class="w-full mt-2 rounded-lg bg-loupe-bg hover:bg-loupe-elev border border-loupe-line text-loupe-fg text-[13px] py-2.5 cursor-pointer transition-colors"
+    >
+      view annotations
+    </button>
+
+    <div id="status" class="text-loupe-accent text-[11px] mt-2 empty:hidden leading-snug"></div>
+
+    <div class="flex items-center justify-between mt-3 text-[11px] text-loupe-faint">
+      <span>
+        <kbd class="bg-white/10 rounded px-1.5 py-0.5">Alt</kbd>
+        <kbd class="bg-white/10 rounded px-1.5 py-0.5">A</kbd>
+      </span>
+      <a id="settings" href="#" class="text-loupe-muted hover:text-loupe-fg">settings</a>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

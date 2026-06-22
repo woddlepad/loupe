@@ -1,0 +1,33 @@
+{
+  "name": "@loupe/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:firefox": "node build.mjs --firefox",
+    "dev": "node build.mjs --watch",
+    "type-check": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@loupe/core": "workspace:*",
+    "@radix-ui/react-dialog": "^1.1.17",
+    "@radix-ui/react-select": "^2.3.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4",
+    "@types/chrome": "^0.0.287",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.24.2",
+    "tailwindcss": "^4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

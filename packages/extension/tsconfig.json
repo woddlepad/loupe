@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["chrome"],
+    "paths": {
+      "@loupe/core": ["../core/src/index.ts"]
+    }
+  },
+  "include": ["src", "build.mjs"],
+  "exclude": ["**/*.test.ts"]
+}
