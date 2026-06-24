@@ -37,6 +37,8 @@ const GITHUB_LOGO_SVG =
 export interface LoupeOverlayOptions {
   /** Called when the user picks an action. Returns when delivery is done. */
   onSubmit: (annotation: Annotation, actionIds: string[]) => void | Promise<void>;
+  /** Called once when the user finishes a click/drag selection. */
+  onSelectionCapture?: (selection: { rect: Rect; devicePixelRatio: number }) => void | Promise<void>;
   /** Actions to render as buttons (advertised by the bridge). */
   actions?: ActionDescriptor[];
   /** Existing group names, offered as autocomplete in the group field. */
@@ -92,6 +94,8 @@ type Phase = "off" | "armed" | "dragging" | "editing";
 
 // Minimal fallback so the overlay is usable even without the injected sheet.
 const BASE = `:host{all:initial;font-family:ui-sans-serif,-apple-system,system-ui,sans-serif}`;
+const FRAME_BASE =
+  "html,body{margin:0!important;width:100%!important;height:100%!important;background:transparent!important;background-color:transparent!important;font-family:ui-sans-serif,-apple-system,system-ui,sans-serif!important;color-scheme:dark}";
 
 const C = {
   layer: "fixed inset-0 z-[2147483646] cursor-crosshair",
@@ -194,6 +198,8 @@ export class LoupeOverlay {
   private draft: LoupeOverlayDraft | null;
   private suppressNextClick = false;
   private cursorStyle: HTMLStyleElement | null = null;
+  private editingDocument: Document | null = null;
+  private noteTextarea: HTMLTextAreaElement | null = null;
 
   constructor(options: LoupeOverlayOptions) {
     this.opts = {
@@ -209,6 +215,7 @@ export class LoupeOverlay {
       captureTarget: defaultCaptureTarget,
       draft: null,
       onDraftChange: () => {},
+      onSelectionCapture: async () => undefined,
       ...options,
     };
     this.draft = this.opts.draft;
@@ -279,12 +286,18 @@ export class LoupeOverlay {
   }
 
   private unmount(): void {
+    this.noteTextarea?.remove();
+    this.noteTextarea = null;
+    this.editingDocument = null;
     this.host?.remove();
     this.host = null;
     this.root = null;
   }
 
   private clearLayer(): void {
+    this.noteTextarea?.remove();
+    this.noteTextarea = null;
+    this.editingDocument = null;
     this.currentRefsRow = null;
     this.currentFileAnchor = null;
     if (!this.root) return;
@@ -302,6 +315,7 @@ export class LoupeOverlay {
   }
 
   private renderArmed(): void {
+    this.moveHostTo(document.body);
     this.clearLayer();
     if (!this.root) return;
     const layer = el("div", { class: C.layer });
@@ -490,6 +504,7 @@ export class LoupeOverlay {
     this.refs = [];
     this.offered = this.withHostHidden(() => suggestionsFor(targetEl));
     this.reportDraft();
+    void this.opts.onSelectionCapture(this.selection);
     void this.renderEditing(targetEl, ++this.renderNonce);
   }
 
@@ -502,6 +517,7 @@ export class LoupeOverlay {
     this.refs = [];
     this.offered = this.withHostHidden(() => suggestionsFor(targetEl));
     this.reportDraft();
+    void this.opts.onSelectionCapture(this.selection);
     void this.renderEditing(targetEl, ++this.renderNonce);
   }
 
@@ -551,8 +567,12 @@ export class LoupeOverlay {
     const target = await this.opts.captureTarget(targetEl);
     if (nonce !== this.renderNonce || this.phase !== "editing") return;
 
+    this.moveHostTo(document.body);
     this.clearLayer();
     if (!this.root) return;
+
+    const frameDoc = this.mountEditingFrame();
+    if (!frameDoc) return;
 
     const layer = el("div", { class: C.layer });
     layer.style.cursor = "default";
@@ -612,12 +632,16 @@ export class LoupeOverlay {
       panel.append(chips);
     }
 
-    const textarea = el("textarea", { class: C.textarea }) as HTMLTextAreaElement;
+    const textarea = el("textarea", {
+      class: C.textarea,
+      "data-loupe-note": "",
+    }) as HTMLTextAreaElement;
     textarea.placeholder = isRef
       ? "what this shows / what to match…"
       : "what's wrong / what to change…";
     textarea.value = this.draft?.note ?? "";
     textarea.addEventListener("input", () => this.reportDraft());
+    this.noteTextarea = textarea;
     panel.append(textarea);
 
     const refsRow = el("div", { class: C.refsRow });
@@ -712,7 +736,7 @@ export class LoupeOverlay {
     });
 
     layer.append(panel);
-    this.root.append(layer);
+    frameDoc.body.append(layer);
     placePanel(panel, this.current);
     this.reportDraft();
     setTimeout(() => textarea.focus(), 0);
@@ -873,7 +897,7 @@ export class LoupeOverlay {
 
   /** Floating grid of library references; picking one attaches its image. */
   private openLibraryPicker(row: HTMLElement, before: HTMLElement): void {
-    const existing = this.root?.querySelector("[data-loupe-picker]");
+    const existing = this.queryUi("[data-loupe-picker]");
     if (existing) {
       existing.remove();
       return;
@@ -948,7 +972,7 @@ export class LoupeOverlay {
   }
 
   private buildAnnotation(target: AnnotationTarget): Annotation {
-    const group = (this.root?.querySelector("#loupe-group") as HTMLInputElement)?.value.trim() ?? "";
+    const group = this.queryUi<HTMLInputElement>("#loupe-group")?.value.trim() ?? "";
     return {
       id: this.opts.generateId(),
       url: location.href,
@@ -958,7 +982,7 @@ export class LoupeOverlay {
       scroll: { x: window.scrollX, y: window.scrollY },
       target,
       acceptedSuggestions: this.offered.filter((s) => this.accepted.has(s.kind)),
-      note: (this.root?.querySelector("textarea") as HTMLTextAreaElement)?.value.trim() ?? "",
+      note: this.noteTextarea?.value.trim() ?? "",
       references: this.refs.map((r) => ({ dataUrl: r.dataUrl })),
       createdAt: nowIso(),
       group: group || undefined,
@@ -968,8 +992,8 @@ export class LoupeOverlay {
 
   private reportDraft(): void {
     if (this.phase !== "editing") return;
-    const note = (this.root?.querySelector("textarea") as HTMLTextAreaElement | null)?.value.trim() ?? this.draft?.note ?? "";
-    const group = (this.root?.querySelector("#loupe-group") as HTMLInputElement | null)?.value.trim() ?? this.draft?.group ?? "";
+    const note = this.noteTextarea?.value.trim() ?? this.draft?.note ?? "";
+    const group = this.queryUi<HTMLInputElement>("#loupe-group")?.value.trim() ?? this.draft?.group ?? "";
     this.draft = {
       mode: this.opts.mode,
       url: location.href,
@@ -1022,8 +1046,65 @@ export class LoupeOverlay {
     if (this.eventInOverlay(e)) e.stopImmediatePropagation();
   };
 
+  private moveHostTo(parent: HTMLElement): void {
+    if (!this.host || this.host.parentElement === parent) return;
+    parent.append(this.host);
+  }
+
+  private queryUi<T extends Element>(selector: string): T | null {
+    return (this.editingDocument ?? this.root)?.querySelector<T>(selector) ?? null;
+  }
+
+  private mountEditingFrame(): Document | null {
+    if (!this.root) return null;
+    const frame = document.createElement("iframe");
+    frame.setAttribute("title", "Loupe annotation editor");
+    frame.setAttribute("aria-label", "Loupe annotation editor");
+    frame.setAttribute("allowtransparency", "true");
+    frame.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "width:100vw",
+      "height:100vh",
+      "border:0",
+      "background:transparent!important",
+      "background-color:transparent!important",
+      "z-index:2147483647",
+      "color-scheme:dark",
+    ].join(";");
+    this.root.append(frame);
+
+    const doc = frame.contentDocument;
+    if (!doc) return null;
+    doc.open();
+    doc.write("<!doctype html><html><head><title>Loupe editor</title></head><body></body></html>");
+    doc.close();
+
+    const style = doc.createElement("style");
+    style.textContent = `${this.opts.stylesheet}\n${FRAME_BASE}`;
+    doc.head.append(style);
+    doc.documentElement.style.setProperty("background", "transparent", "important");
+    doc.body.style.setProperty("background", "transparent", "important");
+    doc.defaultView?.addEventListener("keydown", this.onFrameKeyDown, true);
+    doc.defaultView?.addEventListener("paste", this.onFramePaste, true);
+    this.editingDocument = doc;
+    return doc;
+  }
+
+  private onFrameKeyDown = (e: KeyboardEvent): void => {
+    if (e.key !== "Escape" || !this.active) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    this.disable();
+  };
+
+  private onFramePaste = (e: ClipboardEvent): void => {
+    this.handlePaste(e);
+  };
+
   private onEventMaster = (e: Event): void => {
     if (!this.eventInOverlay(e)) return;
+    if (e.type.startsWith("focus") || e.type === "blur") this.debugEvent(`window:${e.type}`, e);
     e.stopImmediatePropagation();
     if (e.type === "paste") this.handlePaste(e as ClipboardEvent);
   };
@@ -1040,9 +1121,39 @@ export class LoupeOverlay {
       if (file) void this.addRef(file, this.currentRefsRow, this.currentFileAnchor);
     }
   }
+
+  private debugEvent(label: string, e: Event): void {
+    if (!debugEnabled()) return;
+    const path = e.composedPath();
+    const target = path[0];
+    console.info("[loupe:event]", label, {
+      type: e.type,
+      eventPhase: e.eventPhase,
+      defaultPrevented: e.defaultPrevented,
+      target: describeEventTarget(target),
+      retargetedTarget: describeEventTarget(e.target),
+      path: path.slice(0, 8).map(describeEventTarget),
+      documentActive: describeEventTarget(document.activeElement),
+      shadowActive: describeEventTarget(this.root?.activeElement ?? null),
+      isTextEntry: isTextEntryTarget(e),
+    });
+  }
 }
 
-const CONTAINED = ["keyup", "keypress", "paste", "copy", "cut"];
+const CONTAINED = ["keyup", "keypress", "paste", "copy", "cut", "focusin", "focusout", "blur"];
+const CONTAINED_HOST_EVENTS = [
+  "pointerdown",
+  "pointerup",
+  "mousedown",
+  "mouseup",
+  "click",
+  "dblclick",
+  "touchstart",
+  "touchend",
+  "focusin",
+  "focusout",
+  "blur",
+];
 
 // --- helpers ---
 
@@ -1276,20 +1387,57 @@ function nowIso(): string {
 }
 
 /**
- * Stop keyboard + clipboard events that originate inside the overlay from
- * reaching the host page. Without this, events bubbling out of the shadow root
- * are retargeted to the host element, so the page's global single-key shortcuts
- * fire (and often preventDefault the key) — making it impossible to type, paste,
- * or dictate into the panel's fields. We only stop propagation (never the
- * default action), so the field itself still works normally.
+ * Stop overlay interaction events from reaching the host page. Without this,
+ * events bubbling out of the shadow root are retargeted to the host element, so
+ * the page's global shortcuts and outside-click handlers can fire against Loupe
+ * UI. Editing interactions happen inside an iframe, so they do not bubble into
+ * the host page; this catches the remaining host-level events around the frame.
+ * We only stop propagation (never the default action), so the browser can still
+ * deliver interactions to the iframe normally.
  */
 function containEvents(host: HTMLElement): void {
   // Keyboard + clipboard are contained in the capture phase by the overlay's
-  // key master; here we just stop input/beforeinput from leaking to the page.
+  // key master; here we stop the remaining events from leaking after the
+  // overlay or iframe has handled them.
   const stop = (e: Event) => e.stopPropagation();
-  for (const type of ["input", "beforeinput"]) {
+  for (const type of ["input", "beforeinput", ...CONTAINED_HOST_EVENTS]) {
     host.addEventListener(type, stop);
   }
+}
+
+function isTextEntryTarget(e: Event): boolean {
+  return textEntryTarget(e) !== null;
+}
+
+function textEntryTarget(e: Event): HTMLElement | null {
+  const target = e.composedPath()[0];
+  if (target instanceof HTMLTextAreaElement) return target;
+  if (target instanceof HTMLInputElement && !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(target.type)) {
+    return target;
+  }
+  if (target instanceof HTMLElement && target.isContentEditable) return target;
+  return null;
+}
+
+function debugEnabled(): boolean {
+  try {
+    return localStorage.getItem("loupe:debug") !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function describeEventTarget(target: EventTarget | null | undefined): string {
+  if (!target) return "null";
+  if (target === window) return "window";
+  if (target instanceof ShadowRoot) return "#shadow-root";
+  if (!(target instanceof Element)) return target.constructor?.name ?? String(target);
+  const parts = [target.tagName.toLowerCase()];
+  if (target.id) parts.push(`#${target.id}`);
+  if (target.getAttribute("data-loupe-overlay") !== null) parts.push("[data-loupe-overlay]");
+  if (target instanceof HTMLTextAreaElement) parts.push("textarea");
+  if (target instanceof HTMLInputElement) parts.push(`input:${target.type}`);
+  return parts.join("");
 }
 
 function fileToDataUrl(file: File): Promise<string> {

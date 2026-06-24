@@ -25,13 +25,6 @@ import { bridgeUrlForUrl, loadSettings } from "./settings.js";
 import {
   Badge,
   Button,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   Input,
   Textarea,
 } from "./ui.js";
@@ -50,9 +43,12 @@ const GITHUB_LOGO_SVG =
 
 export interface ViewerAppProps {
   onClose: () => void;
+  panelRoot?: HTMLElement | null;
+  panelEmbedded?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
 }
 
-export function ViewerApp({ onClose }: ViewerAppProps) {
+export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, onCollapsedChange }: ViewerAppProps) {
   const [annotations, setAnnotations] = React.useState<StoredAnnotation[]>([]);
   const [actions, setActions] = React.useState<ActionDescriptor[]>([]);
   const [groups, setGroups] = React.useState<GroupSummary[]>([]);
@@ -71,6 +67,21 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
   const [previewGroupOrder, setPreviewGroupOrder] = React.useState<string[] | null>(null);
   const [lightbox, setLightbox] = React.useState<string | null>(null);
   const [, forceLayout] = React.useReducer((n: number) => n + 1, 0);
+
+  React.useEffect(() => {
+    onCollapsedChange?.(collapsed);
+  }, [collapsed, onCollapsedChange]);
+
+  const setViewerCollapsed = React.useCallback(
+    (value: React.SetStateAction<boolean>) => {
+      setCollapsed((current) => {
+        const next = typeof value === "function" ? (value as (current: boolean) => boolean)(current) : value;
+        onCollapsedChange?.(next);
+        return next;
+      });
+    },
+    [onCollapsedChange],
+  );
 
   const reload = React.useCallback(async () => {
     const [list, actionList, groupList, settings] = await Promise.all([
@@ -188,7 +199,7 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
     },
     setExpanded,
     setFilter,
-    setCollapsed,
+    setCollapsed: setViewerCollapsed,
     setDragOverGroup,
     startGroupDrag: (slug) => {
       setDraggingGroupSlug(slug);
@@ -231,13 +242,16 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
     reload,
   };
 
-  return (
+  const panel = (
     <>
       {collapsed ? (
         <button
           type="button"
-          className="fixed right-3 top-3 z-[2147483646] flex h-12 items-center gap-2 rounded-xl border border-loupe-line bg-loupe-panel/95 px-2 text-loupe-fg shadow-2xl shadow-black/50 transition-all hover:border-loupe-line-strong active:scale-[0.98]"
-          onClick={() => setCollapsed(false)}
+          className={cn(
+            "flex h-12 items-center gap-2 rounded-xl border border-loupe-line bg-loupe-panel/95 px-2 text-loupe-fg shadow-2xl shadow-black/50 transition-all hover:border-loupe-line-strong active:scale-[0.98]",
+            panelEmbedded ? "w-full" : "fixed right-3 top-3 z-[2147483646]",
+          )}
+          onClick={() => setViewerCollapsed(false)}
           title="Show annotations"
         >
           <Logo />
@@ -246,14 +260,19 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
           </span>
         </button>
       ) : (
-        <section className="fixed bottom-3 right-3 top-3 z-[2147483646] flex w-[420px] flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel/95 text-[13px] text-loupe-fg shadow-2xl shadow-black/50">
+        <section
+          className={cn(
+            "flex flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel/95 text-[13px] text-loupe-fg shadow-2xl shadow-black/50",
+            panelEmbedded ? "h-full w-full" : "fixed bottom-3 right-3 top-3 z-[2147483646] w-[420px]",
+          )}
+        >
           <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-loupe-line px-3 py-2">
             <div className="flex items-center gap-1 rounded-xl border border-loupe-line bg-loupe-bg/60 p-1">
               <SegmentButton active={filter === "page"} count={pageCount} onClick={() => setFilter("page")}>This page</SegmentButton>
               <SegmentButton active={filter === "all"} count={allCount} onClick={() => setFilter("all")}>All pages</SegmentButton>
             </div>
             <div className="ml-auto" />
-            <Button variant="ghost" size="icon" title="Collapse annotations" onClick={() => setCollapsed(true)}>
+            <Button variant="ghost" size="icon" title="Collapse annotations" onClick={() => setViewerCollapsed(true)}>
               <PanelRightClose className="h-4 w-4" />
             </Button>
             <Button variant="ghost" size="icon" title="Close annotations" onClick={onClose}>
@@ -296,14 +315,20 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
                 <AnnotationGroup key={row.slug} group={row.group} slug={row.slug} items={row.items} ctx={ctx} />
               ))
             )}
-            <AddGroupDialog onDone={reload} />
+            <AddGroupForm onDone={reload} />
           </div>
 
           <BrandFooter />
         </section>
       )}
+    </>
+  );
 
-      <Pins annotations={annotations} showResolved={showResolved} expanded={expanded} setExpanded={setExpanded} setFilter={setFilter} setCollapsed={setCollapsed} />
+  return (
+    <>
+      {panelRoot ? createPortal(panel, panelRoot) : panel}
+
+      <Pins annotations={annotations} showResolved={showResolved} expanded={expanded} setExpanded={setExpanded} setFilter={setFilter} setCollapsed={setViewerCollapsed} />
       {lightbox ? <Lightbox src={lightbox} onClose={() => setLightbox(null)} /> : null}
     </>
   );
@@ -438,8 +463,8 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
           onSend={(actionId) => void sendGroup(actionId)}
         />
       </div>
-      <RenameGroupDialog open={renameOpen} onOpenChange={setRenameOpen} slug={slug} group={group} onDone={ctx.reload} />
-      <DeleteGroupDialog
+      <RenameGroupForm open={renameOpen} onOpenChange={setRenameOpen} slug={slug} group={group} onDone={ctx.reload} />
+      <DeleteGroupConfirm
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         slug={slug}
@@ -465,7 +490,7 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
   );
 }
 
-function AddGroupDialog({ onDone }: { onDone: () => Promise<void> }) {
+function AddGroupForm({ onDone }: { onDone: () => Promise<void> }) {
   const [open, setOpen] = React.useState(false);
   const [value, setValue] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -488,44 +513,34 @@ function AddGroupDialog({ onDone }: { onDone: () => Promise<void> }) {
   }
 
   return (
-    <>
-      <div className="mx-2 mt-3 border-t border-loupe-line/70 pt-2">
+    <div className="mx-2 mt-3 border-t border-loupe-line/70 pt-2">
+      {!open ? (
         <Button type="button" variant="secondary" size="xs" className="w-full" onClick={() => setOpen(true)}>
           <Plus className="h-3.5 w-3.5" />
           Add group
         </Button>
-      </div>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(92vw,380px)]">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void addGroup();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>New group</DialogTitle>
-              <DialogDescription>Create an empty group for annotations.</DialogDescription>
-            </DialogHeader>
-            <div className="px-5 py-4">
-              <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
-            </div>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button type="button" variant="secondary" size="xs" className="min-w-20">Cancel</Button>
-              </DialogClose>
-              <Button type="submit" variant="primary" size="xs" className="min-w-20" disabled={saving || !value.trim()}>
-                {saving ? "Adding..." : "OK"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </>
+      ) : (
+        <form
+          className="rounded-xl border border-loupe-line bg-loupe-bg/50 p-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void addGroup();
+          }}
+        >
+          <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
+          <div className="mt-2 flex items-center justify-end gap-1.5">
+            <Button type="button" variant="secondary" size="xs" className="min-w-20" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" size="xs" className="min-w-20" disabled={saving || !value.trim()}>
+              {saving ? "Adding..." : "OK"}
+            </Button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 
-function RenameGroupDialog({
+function RenameGroupForm({
   group,
   onDone,
   onOpenChange,
@@ -564,37 +579,28 @@ function RenameGroupDialog({
     }
   }
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(92vw,380px)]">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void rename();
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Rename group</DialogTitle>
-            <DialogDescription>Update the group label and its Loupe folder slug.</DialogDescription>
-          </DialogHeader>
-          <div className="px-5 py-4">
-            <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="secondary" size="xs" className="min-w-20">Cancel</Button>
-            </DialogClose>
-            <Button type="submit" variant="primary" size="xs" className="min-w-20" disabled={saving || !value.trim()}>
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <form
+      className="mx-2 mb-1 rounded-xl border border-loupe-line bg-loupe-bg/50 p-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void rename();
+      }}
+    >
+      <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
+      <div className="mt-2 flex items-center justify-end gap-1.5">
+        <Button type="button" variant="secondary" size="xs" className="min-w-20" onClick={() => onOpenChange(false)}>Cancel</Button>
+        <Button type="submit" variant="primary" size="xs" className="min-w-20" disabled={saving || !value.trim()}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
+    </form>
   );
 }
 
-function DeleteGroupDialog({
+function DeleteGroupConfirm({
   count,
   group,
   onDone,
@@ -638,28 +644,23 @@ function DeleteGroupDialog({
     }
   }
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(92vw,400px)]">
-        <DialogHeader>
-          <DialogTitle>Delete group</DialogTitle>
-          <DialogDescription>
-            {count > 0
-              ? `Delete "${group}" and its ${count} annotation${count === 1 ? "" : "s"}.`
-              : `Delete the empty "${group}" group.`}
-          </DialogDescription>
-        </DialogHeader>
-        {error ? <div className="mx-5 mt-4 rounded-lg border border-red-400/25 bg-red-500/10 px-3 py-2 text-[12px] text-red-100">{error}</div> : null}
-        <DialogFooter>
-          <DialogClose asChild>
-            <Button type="button" variant="secondary" size="xs" className="min-w-20">Cancel</Button>
-          </DialogClose>
-          <Button type="button" variant="danger" size="xs" className="min-w-20" disabled={deleting} onClick={() => void deleteGroup()}>
-            {deleting ? "Deleting..." : "Delete"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <div className="mx-2 mb-1 rounded-xl border border-white/15 bg-white/5 p-2 text-[12px] text-loupe-muted">
+      <div>
+        {count > 0
+          ? `Delete "${group}" and its ${count} annotation${count === 1 ? "" : "s"}?`
+          : `Delete the empty "${group}" group?`}
+      </div>
+      {error ? <div className="mt-2 rounded-lg border border-red-400/25 bg-red-500/10 px-2 py-1.5 text-red-100">{error}</div> : null}
+      <div className="mt-2 flex items-center justify-end gap-1.5">
+        <Button type="button" variant="secondary" size="xs" className="min-w-20" onClick={() => onOpenChange(false)}>Cancel</Button>
+        <Button type="button" variant="danger" size="xs" className="min-w-20" disabled={deleting} onClick={() => void deleteGroup()}>
+          {deleting ? "Deleting..." : "Delete"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -693,74 +694,17 @@ function GroupActionsMenu({
   onSend: (action: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
-  const [menuPosition, setMenuPosition] = React.useState<{ left: number; top: number } | null>(null);
-  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const menuRef = React.useRef<HTMLDivElement | null>(null);
-
-  const updateMenuPosition = React.useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    const triggerRect = trigger.getBoundingClientRect();
-    const menuRect = menuRef.current?.getBoundingClientRect();
-    const margin = 8;
-    const gap = 6;
-    const width = menuRect?.width || 192;
-    const height = menuRect?.height || 224;
-    const left = Math.min(Math.max(margin, triggerRect.right - width), window.innerWidth - width - margin);
-    const below = triggerRect.bottom + gap;
-    const top = below + height <= window.innerHeight - margin
-      ? below
-      : Math.max(margin, triggerRect.top - height - gap);
-    setMenuPosition({ left, top });
-  }, []);
-
-  React.useLayoutEffect(() => {
-    if (!open) {
-      setMenuPosition(null);
-      return;
-    }
-    updateMenuPosition();
-    window.addEventListener("resize", updateMenuPosition, true);
-    window.addEventListener("scroll", updateMenuPosition, true);
-    return () => {
-      window.removeEventListener("resize", updateMenuPosition, true);
-      window.removeEventListener("scroll", updateMenuPosition, true);
-    };
-  }, [open, updateMenuPosition]);
-
-  React.useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const path = event.composedPath();
-      if (menuRef.current && path.includes(menuRef.current)) return;
-      if (triggerRef.current && path.includes(triggerRef.current)) return;
-      setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", closeOnOutsidePointer, true);
-    window.addEventListener("keydown", closeOnEscape, true);
-    return () => {
-      window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
-      window.removeEventListener("keydown", closeOnEscape, true);
-    };
-  }, [open]);
 
   function choose(callback: () => void) {
     setOpen(false);
     callback();
   }
 
-  const rootNode = triggerRef.current?.getRootNode();
-  const portalRoot = rootNode instanceof ShadowRoot ? rootNode : null;
   const menu = open ? (
     <div
-      ref={menuRef}
       role="menu"
-      className="fixed z-[2147483647] w-48 overflow-hidden rounded-lg border border-loupe-line bg-loupe-panel p-1 text-loupe-fg shadow-2xl shadow-black/50"
-      style={menuPosition ? menuPosition : { visibility: "hidden" }}
-      onClick={(e) => e.stopPropagation()}
+      className="absolute right-0 top-[calc(100%+4px)] z-[2147483647] w-48 overflow-hidden rounded-lg border border-loupe-line bg-loupe-panel p-1 text-loupe-fg shadow-2xl shadow-black/50"
+      onPointerDown={(e) => e.stopPropagation()}
     >
       <MenuItem onSelect={() => choose(onHide)} icon={<EyeOff className="h-3.5 w-3.5" />}>
         Hide on this page
@@ -797,21 +741,30 @@ function GroupActionsMenu({
   ) : null;
 
   return (
-    <div className={cn("relative", className)} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={cn("relative", className)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       <Button
-        ref={triggerRef}
         type="button"
         size="icon"
         variant="ghost"
-        className={cn("h-7 w-7 opacity-0 transition-all focus-visible:opacity-100 group-hover:opacity-100", open && "opacity-100")}
+        className={cn("h-7 w-7 opacity-70 transition-all hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100", open && "opacity-100")}
         title="More group actions"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
       >
         <MoreHorizontal className="h-4 w-4" />
       </Button>
-      {menu && portalRoot ? createPortal(menu, portalRoot) : null}
+      {menu}
     </div>
   );
 }
@@ -829,6 +782,12 @@ function MenuItem({
   onSelect: () => void;
   tone?: "normal" | "danger";
 }) {
+  const select = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!disabled) onSelect();
+  };
+
   return (
     <button
       type="button"
@@ -840,7 +799,7 @@ function MenuItem({
         tone === "normal" && "text-loupe-muted hover:bg-loupe-elev hover:text-loupe-fg focus-visible:bg-loupe-elev focus-visible:text-loupe-fg",
         tone === "danger" && "text-loupe-muted hover:bg-red-500/10 hover:text-red-200 focus-visible:bg-red-500/10 focus-visible:text-red-200",
       )}
-      onClick={onSelect}
+      onPointerDown={select}
     >
       <span className="grid h-4 w-4 shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 truncate">{children}</span>
@@ -1023,7 +982,7 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
           }
         }} />
         <Button variant="secondary" size="xs" onClick={() => fileRef.current?.click()}><ImagePlus className="h-3.5 w-3.5" />Add ref</Button>
-        <LibraryReferenceDialog
+        <LibraryReferencePicker
           bridgeUrl={ctx.bridgeUrl}
           repoRoot={ctx.repoRoot}
           refs={refs}
@@ -1085,7 +1044,7 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
   );
 }
 
-function LibraryReferenceDialog({
+function LibraryReferencePicker({
   bridgeUrl,
   repoRoot,
   refs,
@@ -1101,28 +1060,7 @@ function LibraryReferenceDialog({
   const [collapsedDomains, setCollapsedDomains] = React.useState<Set<string>>(() => new Set());
   const [attaching, setAttaching] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const popoverRef = React.useRef<HTMLDivElement | null>(null);
   const grouped = React.useMemo(() => filterReferencesByDomain(refs, query), [refs, query]);
-
-  React.useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!popoverRef.current) return;
-      if (!event.composedPath().includes(popoverRef.current)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", closeOnOutsidePointer, true);
-    window.addEventListener("keydown", closeOnEscape, true);
-    return () => {
-      window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
-      window.removeEventListener("keydown", closeOnEscape, true);
-    };
-  }, [open]);
 
   async function attach(ref: ReferenceItem) {
     setAttaching(ref.id);
@@ -1147,7 +1085,7 @@ function LibraryReferenceDialog({
   }
 
   return (
-    <div ref={popoverRef} className="relative" data-loupe-library-popover={open ? "" : undefined}>
+    <div className={cn("relative", open && "basis-full")} data-loupe-library-popover={open ? "" : undefined}>
       <Button
         type="button"
         variant="secondary"
@@ -1159,14 +1097,8 @@ function LibraryReferenceDialog({
         From library
       </Button>
       {open ? (
-        <div
-          className="fixed inset-0 z-[2147483647] grid place-items-center bg-black/70 p-4 text-loupe-fg"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setOpen(false);
-          }}
-        >
-          <div className="flex max-h-[min(760px,calc(100vh-2rem))] w-[min(920px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-loupe-line bg-loupe-panel shadow-2xl shadow-black/60">
-            <div className="flex items-start gap-3 border-b border-loupe-line px-4 py-3">
+        <div className="mt-2 flex max-h-96 w-full flex-col overflow-hidden rounded-xl border border-loupe-line bg-loupe-panel text-loupe-fg shadow-xl shadow-black/40">
+            <div className="flex items-start gap-3 border-b border-loupe-line px-3 py-2.5">
               <div className="min-w-0">
                 <div className="text-[13px] font-semibold leading-none">Reference library</div>
                 <div className="mt-1 text-[11px] text-loupe-muted">Choose a capture to attach.</div>
@@ -1175,7 +1107,7 @@ function LibraryReferenceDialog({
                 <X className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <div className="border-b border-loupe-line p-3">
+            <div className="border-b border-loupe-line p-2.5">
               <Input
                 className="h-8"
                 type="search"
@@ -1184,7 +1116,7 @@ function LibraryReferenceDialog({
                 placeholder="Search library"
               />
             </div>
-            <div className="flex-1 overflow-y-auto p-3">
+            <div className="flex-1 overflow-y-auto p-2.5">
               {error ? (
                 <div className="mb-3 rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-[12px] text-loupe-fg">
                   {error}
@@ -1248,7 +1180,6 @@ function LibraryReferenceDialog({
                 </div>
               )}
             </div>
-          </div>
         </div>
       ) : null}
     </div>
@@ -1257,42 +1188,66 @@ function LibraryReferenceDialog({
 
 function DeleteAnnotationButton({ annotation, onDone }: { annotation: StoredAnnotation; onDone: () => Promise<void> }) {
   const [deleting, setDeleting] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);
   return (
-    <Button
-      className="ml-auto min-w-20"
-      variant="danger"
-      size="xs"
-      disabled={deleting}
-      onClick={async () => {
-        if (!window.confirm("Delete this annotation?")) return;
-        setDeleting(true);
-        const r = (await chrome.runtime.sendMessage({ type: "delete-annotation", id: annotation.id } satisfies LoupeMessage)) as SimpleResult;
-        setDeleting(false);
-        if (r.ok) await onDone();
-      }}
-    >
-      <Trash2 className="h-3.5 w-3.5" />{deleting ? "Deleting..." : "Delete"}
-    </Button>
+    <div className="ml-auto flex items-center gap-1.5">
+      {confirming ? (
+        <Button type="button" variant="secondary" size="xs" className="min-w-16" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+      ) : null}
+      <Button
+        className="min-w-20"
+        variant="danger"
+        size="xs"
+        disabled={deleting}
+        onClick={async () => {
+          if (!confirming) {
+            setConfirming(true);
+            return;
+          }
+          setDeleting(true);
+          const r = (await chrome.runtime.sendMessage({ type: "delete-annotation", id: annotation.id } satisfies LoupeMessage)) as SimpleResult;
+          setDeleting(false);
+          setConfirming(false);
+          if (r.ok) await onDone();
+        }}
+      >
+        <Trash2 className="h-3.5 w-3.5" />{deleting ? "Deleting..." : confirming ? "Confirm" : "Delete"}
+      </Button>
+    </div>
   );
 }
 
 function DeleteResolvedButton({ count, onDone }: { count: number; onDone: () => Promise<void> }) {
   const [deleting, setDeleting] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);
   return (
-    <Button
-      variant="danger"
-      size="xs"
-      disabled={deleting}
-      onClick={async () => {
-        if (!window.confirm(`Delete ${count} resolved annotation${count === 1 ? "" : "s"}?`)) return;
-        setDeleting(true);
-        const r = (await chrome.runtime.sendMessage({ type: "delete-resolved" } satisfies LoupeMessage)) as SimpleResult;
-        setDeleting(false);
-        if (r.ok) await onDone();
-      }}
-    >
-      <Trash2 className="h-3.5 w-3.5" />{deleting ? "Deleting..." : "Delete resolved"}
-    </Button>
+    <div className="flex items-center gap-1.5">
+      {confirming ? (
+        <Button type="button" variant="secondary" size="xs" className="min-w-16" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+      ) : null}
+      <Button
+        variant="danger"
+        size="xs"
+        disabled={deleting}
+        onClick={async () => {
+          if (!confirming) {
+            setConfirming(true);
+            return;
+          }
+          setDeleting(true);
+          const r = (await chrome.runtime.sendMessage({ type: "delete-resolved" } satisfies LoupeMessage)) as SimpleResult;
+          setDeleting(false);
+          setConfirming(false);
+          if (r.ok) await onDone();
+        }}
+      >
+        <Trash2 className="h-3.5 w-3.5" />{deleting ? "Deleting..." : confirming ? `Confirm ${count}` : "Delete resolved"}
+      </Button>
+    </div>
   );
 }
 

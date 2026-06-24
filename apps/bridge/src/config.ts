@@ -17,13 +17,18 @@ export interface AgentCommand {
    * "spawn" (default): run `argv` as a fresh detached process.
    * "codex-app": open a new Codex Desktop thread with `{loupeCommand}` and
    *   the repo path prefilled.
+   * "codex-app-server": create a thread through the local Codex app-server
+   *   daemon. Use this when the bridge runs on a remote host and your Codex
+   *   desktop app is connected to that host.
    * "session": don't spawn — the annotation is already committed to `.loupe/`,
    *   so an already-open agent session picks it up (e.g. Claude Code with a
    *   `/rc`-style command). No headless `-p` run.
    */
-  mode?: "spawn" | "session" | "codex-app";
+  mode?: "spawn" | "session" | "codex-app" | "codex-app-server";
   /** argv for spawn mode, e.g. ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"]. */
   argv?: string[];
+  /** Unix socket for the Codex app-server daemon; defaults to $CODEX_HOME/app-server-control/app-server-control.sock. */
+  socketPath?: string;
 }
 
 export interface BridgeConfig {
@@ -51,6 +56,7 @@ export interface BridgeConfig {
 
 function defaultAgents(): Record<string, AgentCommand> {
   const codexCloudEnv = process.env["LOUPE_CODEX_CLOUD_ENV"] ?? process.env["CODEX_CLOUD_ENV"];
+  const codexAppServer = process.env["LOUPE_CODEX_APP_SERVER"];
   return {
     // Claude: start a background Claude Code run that picks up the saved Loupe
     // bundle through the installed /loupe slash command.
@@ -59,7 +65,9 @@ function defaultAgents(): Record<string, AgentCommand> {
     // phone-visible Cloud tasks, set LOUPE_CODEX_CLOUD_ENV to a Codex Cloud env.
     codex: codexCloudEnv
       ? { mode: "spawn", argv: ["codex", "cloud", "exec", "--env", codexCloudEnv, "{loupeCommand}"] }
-      : { mode: "codex-app" },
+      : codexAppServer
+        ? { mode: "codex-app-server", socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"] }
+        : { mode: "codex-app" },
   };
 }
 

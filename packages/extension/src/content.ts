@@ -60,6 +60,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
       mode: "reference",
       stylesheet: overlayCss,
       generateId: newId,
+      onSelectionCapture: copySelectionScreenshotToClipboard,
       draft: restoreDraft,
       onDraftChange: saveDraft,
       onSubmit: handleSubmit,
@@ -81,6 +82,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
       stylesheet: overlayCss,
       generateId: newId,
       captureTarget: captureTargetWithPageFrameworks,
+      onSelectionCapture: copySelectionScreenshotToClipboard,
       draft: restoreDraft,
       onDraftChange: saveDraft,
       onSubmit: handleSubmit,
@@ -109,7 +111,7 @@ async function handleSubmit(annotation: Annotation, actionIds: string[]): Promis
   if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
   annotation.screenshotDataUrl = shot.dataUrl;
 
-  const clipboardDetail = await copyAgentPromptIfAvailable(annotation);
+  const clipboardDetail = await copyAnnotationClipboardIfAvailable(annotation);
 
   if (mode === "reference") {
     const r = (await chrome.runtime.sendMessage({
@@ -197,10 +199,10 @@ async function getLastGroup(): Promise<string> {
 async function loadDraft(): Promise<LoupeOverlayDraft | null> {
   const key = draftStorageKey(location.href);
   try {
-    const stored = await chrome.storage.session.get(key);
+    const stored = await draftStorageGet(key);
     const draft = stored[key];
     if (!isFreshDraft(draft)) {
-      await chrome.storage.session.remove(key);
+      await draftStorageRemove(key);
       return null;
     }
     return draft;
@@ -214,12 +216,36 @@ async function saveDraft(draft: LoupeOverlayDraft | null): Promise<void> {
   const key = draftStorageKey(draft?.url ?? location.href);
   try {
     if (!draft) {
-      await chrome.storage.session.remove(key);
+      await draftStorageRemove(key);
       return;
     }
-    await chrome.storage.session.set({ [key]: draft });
+    await draftStorageSet({ [key]: draft });
   } catch (e) {
     console.warn("[loupe] draft save failed", e);
+  }
+}
+
+async function draftStorageGet(key: string): Promise<Record<string, unknown>> {
+  try {
+    return await chrome.storage.session.get(key);
+  } catch {
+    return await chrome.storage.local.get(key);
+  }
+}
+
+async function draftStorageSet(value: Record<string, LoupeOverlayDraft>): Promise<void> {
+  try {
+    await chrome.storage.session.set(value);
+  } catch {
+    await chrome.storage.local.set(value);
+  }
+}
+
+async function draftStorageRemove(key: string): Promise<void> {
+  try {
+    await chrome.storage.session.remove(key);
+  } catch {
+    await chrome.storage.local.remove(key);
   }
 }
 
@@ -310,20 +336,76 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-async function copyAgentPrompt(annotation: Annotation): Promise<string> {
+async function copySelectionScreenshotToClipboard(selection: { rect: Annotation["rect"]; devicePixelRatio: number }): Promise<void> {
+  const activeOverlay = overlay;
+  try {
+    activeOverlay?.setChromeVisible(false);
+    await nextFrame();
+    await nextFrame();
+    const shot = (await chrome.runtime.sendMessage({
+      type: "capture",
+      rect: selection.rect,
+      devicePixelRatio: selection.devicePixelRatio,
+    } satisfies LoupeMessage)) as CaptureResult;
+    if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
+    await writeScreenshotToClipboard(shot.dataUrl);
+  } catch (e) {
+    console.warn("[loupe] automatic screenshot clipboard copy failed", e);
+  } finally {
+    activeOverlay?.setChromeVisible(true);
+  }
+}
+
+async function copyAnnotationClipboard(annotation: Annotation): Promise<string> {
   const resolution = await resolveTarget(annotation);
+  const prompt = agentPromptText(annotation, resolution);
+  if (annotation.screenshotDataUrl) {
+    try {
+      await writeScreenshotToClipboard(annotation.screenshotDataUrl, prompt);
+      return "copied screenshot + prompt";
+    } catch (e) {
+      console.warn("[loupe] screenshot clipboard copy failed", e);
+    }
+  }
   if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
-  await navigator.clipboard.writeText(agentPromptText(annotation, resolution));
+  await navigator.clipboard.writeText(prompt);
   return "copied agent prompt";
 }
 
-async function copyAgentPromptIfAvailable(annotation: Annotation): Promise<string | null> {
+async function copyAnnotationClipboardIfAvailable(annotation: Annotation): Promise<string | null> {
   try {
-    return await copyAgentPrompt(annotation);
+    return await copyAnnotationClipboard(annotation);
   } catch (e) {
     console.warn("[loupe] automatic clipboard copy failed", e);
     return null;
   }
+}
+
+async function writeScreenshotToClipboard(dataUrl: string, text?: string): Promise<void> {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    throw new Error("image clipboard unavailable");
+  }
+  const png = await dataUrlToPngBlob(dataUrl);
+  if (text) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "image/png": png,
+          "text/plain": new Blob([text], { type: "text/plain" }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Some browsers only accept image/png for programmatic image writes.
+    }
+  }
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+}
+
+async function dataUrlToPngBlob(dataUrl: string): Promise<Blob> {
+  const blob = await (await fetch(dataUrl)).blob();
+  if (blob.type === "image/png") return blob;
+  return new Blob([await blob.arrayBuffer()], { type: "image/png" });
 }
 
 async function resolveTarget(annotation: Annotation): Promise<ResolveContext | null> {

@@ -275,7 +275,7 @@ The note panel renders one button per action the daemon advertises. Configure in
 }
 ```
 
-Agents run in one of three modes:
+Agents run in one of four modes:
 
 - **`spawn`** — launch a fresh detached process from `argv`. Placeholders:
   `{prompt}`, `{imageArgs}` (→ `-i shot.png,ref.png` for Codex), `{bundleDir}`,
@@ -284,8 +284,31 @@ Agents run in one of three modes:
 - **`codex-app`** — open a visible Codex Desktop thread with `/loupe <id-or-group>`
   and the repo path prefilled. Codex uses this by default when
   `LOUPE_CODEX_CLOUD_ENV` is not set.
+- **`codex-app-server`** — create a visible Codex Desktop thread through the
+  Codex app-server daemon on the bridge machine. Use this for remote bridges
+  where your local Codex app is connected to the target host over SSH.
 - **`session`** — don't spawn anything. The annotation is committed to
   `.loupe/`, so an already-open agent session or custom workflow can pick it up.
+
+For a remote bridge that should hand annotations to the Codex desktop app
+connected to that same host, start the bridge with:
+
+```sh
+LOUPE_CODEX_APP_SERVER=1 loupe bridge --repo ~/dev/atmOS --host 0.0.0.0
+```
+
+Or make the daemon socket explicit in `.loupe/config.json`:
+
+```json
+{
+  "agents": {
+    "codex": {
+      "mode": "codex-app-server",
+      "socketPath": "/root/.codex/app-server-control/app-server-control.sock"
+    }
+  }
+}
+```
 
 To submit phone-visible Codex Cloud tasks, configure a Codex Cloud environment
 and start the bridge with:
