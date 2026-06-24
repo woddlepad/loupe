@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentCommand } from "./config.js";
-import { buildCodexUrl, expandAgentArgv } from "./actions/agent.js";
+import { buildCodexUrl, defaultCodexAppServerSocketPath, expandAgentArgv } from "./actions/agent.js";
 
 test("expands Claude default to background Loupe slash command", () => {
   const cmd: AgentCommand = { mode: "spawn", argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] };
@@ -45,4 +45,18 @@ test("expands Codex Cloud command from config", () => {
     "env_123",
     "/loupe notes",
   ]);
+});
+
+test("builds default Codex app-server socket path from CODEX_HOME", () => {
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = "/tmp/test-codex-home";
+  try {
+    assert.equal(
+      defaultCodexAppServerSocketPath(),
+      "/tmp/test-codex-home/app-server-control/app-server-control.sock",
+    );
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+  }
 });

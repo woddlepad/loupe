@@ -492,7 +492,7 @@ function commentAuthor(repoRoot: string, author: string | undefined): string {
   return trimmed;
 }
 
-function handleGroupRun(
+async function handleGroupRun(
   config: BridgeConfig,
   registry: ActionRegistry,
   slug: string,
@@ -514,7 +514,7 @@ function handleGroupRun(
       };
     }
     const logPath = resolve(config.repoRoot, ".loupe/annotations", slug, `agent-${body.action}.log`);
-    const outcome = runAgentGroup(body.action, agentCmd, config, groupName, items, logPath);
+    const outcome = await runAgentGroup(body.action, agentCmd, config, groupName, items, logPath);
     console.log(`[loupe] group "${slug}" → ${body.action} (${items.length} items): ${outcome.detail}`);
     return { ok: outcome.ok, action: body.action, count: items.length, detail: outcome.detail };
   }

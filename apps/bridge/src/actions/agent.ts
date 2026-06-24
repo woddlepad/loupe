@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
+import { randomBytes, createHash } from "node:crypto";
 import { existsSync, openSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { createConnection, type Socket } from "node:net";
 import type { Annotation } from "@loupe/core/model";
 import type { AgentCommand, BridgeConfig } from "../config.js";
 import type { WrittenBundle } from "../bundle.js";
@@ -17,7 +20,9 @@ export function agentActions(config: BridgeConfig): Action[] {
     run: (ctx: ActionContext) =>
       cmd.mode === "session"
         ? sessionOutcome(name, ctx)
-        : cmd.mode === "codex-app"
+        : cmd.mode === "codex-app-server"
+          ? openCodexAppServer(name, cmd, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
+          : cmd.mode === "codex-app"
           ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
           : runAgent(name, cmd, ctx),
   }));
@@ -55,7 +60,8 @@ export function runAgentGroup(
   group: string,
   annotations: StoredAnnotation[],
   groupLogPath: string,
-): ActionOutcome {
+): ActionOutcome | Promise<ActionOutcome> {
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, `/loupe ${group}`);
   if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, `/loupe ${group}`);
   const prompt = buildGroupPrompt(name, group, annotations);
   return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath);
@@ -76,6 +82,53 @@ function openCodexApp(name: string, repoRoot: string, loupeCommand: string): Act
     return { ok: true, detail: "opened Codex app" };
   } catch (e) {
     return { ok: false, detail: `${name}: ${String(e)}` };
+  }
+}
+
+async function openCodexAppServer(
+  name: string,
+  cmd: AgentCommand,
+  repoRoot: string,
+  loupeCommand: string,
+): Promise<ActionOutcome> {
+  const socketPath = cmd.socketPath ?? defaultCodexAppServerSocketPath();
+  if (!existsSync(socketPath)) {
+    return {
+      ok: false,
+      detail: `${name}: Codex app-server socket not found (${socketPath}); start Codex Desktop remote connection or run codex app-server daemon start`,
+    };
+  }
+
+  let client: CodexAppServerRpcClient | undefined;
+  try {
+    client = await CodexAppServerRpcClient.connect(socketPath);
+    await client.call("initialize", {
+      clientInfo: { name: "loupe-bridge", version: "0.1.0" },
+      capabilities: {
+        experimentalApi: true,
+        requestAttestation: false,
+        mcpServerOpenaiFormElicitation: false,
+      },
+    });
+    client.notify("initialized");
+
+    const started = await client.call("thread/start", { cwd: repoRoot });
+    const threadId = jsonPath(started, ["thread", "id"]);
+    if (typeof threadId !== "string" || !threadId) {
+      return { ok: false, detail: `${name}: thread/start did not return a thread id` };
+    }
+
+    await client.call("turn/start", {
+      threadId,
+      cwd: repoRoot,
+      input: [{ type: "text", text: loupeCommand, textElements: [] }],
+    });
+
+    return { ok: true, detail: `opened Codex thread ${threadId}` };
+  } catch (e) {
+    return { ok: false, detail: `${name}: ${e instanceof Error ? e.message : String(e)}` };
+  } finally {
+    client?.close();
   }
 }
 
@@ -149,6 +202,7 @@ function openerArgv(url: string): string[] {
 
 function agentHint(name: string, cmd: AgentCommand): string {
   if (cmd.mode === "session") return `hand to an open ${name} session (it's committed to .loupe/)`;
+  if (cmd.mode === "codex-app-server") return "create a visible Codex app thread through the app-server daemon";
   if (cmd.mode === "codex-app") return "open a Codex app thread for this annotation";
   return `start a fresh ${name} session on this annotation`;
 }
@@ -218,4 +272,224 @@ function buildGroupPrompt(agentName: string, group: string, annotations: StoredA
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export function defaultCodexAppServerSocketPath(): string {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  return join(codexHome, "app-server-control", "app-server-control.sock");
+}
+
+function jsonPath(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || !(key in current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+class CodexAppServerRpcClient {
+  private nextId = 1;
+  private frameBuffer = Buffer.alloc(0);
+  private readonly pending = new Map<
+    string,
+    {
+      method: string;
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timeout: NodeJS.Timeout;
+    }
+  >();
+
+  private constructor(private readonly socket: Socket) {}
+
+  static async connect(socketPath: string): Promise<CodexAppServerRpcClient> {
+    const socket = createConnection(socketPath);
+    const client = new CodexAppServerRpcClient(socket);
+    await client.handshake();
+    socket.on("data", (chunk) => client.receiveFrames(chunk));
+    socket.on("error", (error) => client.rejectAll(error));
+    socket.on("close", () => client.rejectAll(new Error("Codex app-server connection closed")));
+    return client;
+  }
+
+  call(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const id = String(this.nextId++);
+    this.writeJson({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, 30_000);
+      this.pending.set(id, { method, resolve, reject, timeout });
+    });
+  }
+
+  notify(method: string, params?: Record<string, unknown>): void {
+    this.writeJson(params ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", method });
+  }
+
+  close(): void {
+    if (!this.socket.destroyed) this.socket.end(encodeWebSocketFrame(Buffer.alloc(0), 0x8));
+  }
+
+  private handshake(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const key = randomBytes(16).toString("base64");
+      const expectedAccept = createHash("sha1")
+        .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+        .digest("base64");
+      let buffer = Buffer.alloc(0);
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error("Codex app-server websocket handshake timed out"));
+      }, 10_000);
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.socket.off("data", onData);
+        this.socket.off("error", onError);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onData = (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd < 0) return;
+        const header = buffer.subarray(0, headerEnd).toString("utf8");
+        if (!/^HTTP\/1\.1 101\b/m.test(header)) {
+          cleanup();
+          reject(new Error(`Codex app-server websocket handshake failed: ${header.split("\r\n")[0] ?? header}`));
+          return;
+        }
+        if (!header.toLowerCase().includes(`sec-websocket-accept: ${expectedAccept.toLowerCase()}`)) {
+          cleanup();
+          reject(new Error("Codex app-server websocket handshake returned an invalid accept key"));
+          return;
+        }
+        cleanup();
+        this.frameBuffer = buffer.subarray(headerEnd + 4);
+        resolve();
+      };
+
+      this.socket.once("error", onError);
+      this.socket.on("data", onData);
+      this.socket.write(
+        [
+          "GET /rpc HTTP/1.1",
+          "Host: localhost",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          `Sec-WebSocket-Key: ${key}`,
+          "Sec-WebSocket-Version: 13",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
+  }
+
+  private writeJson(value: unknown): void {
+    this.socket.write(encodeWebSocketFrame(Buffer.from(JSON.stringify(value)), 0x1));
+  }
+
+  private receiveFrames(chunk: Buffer): void {
+    this.frameBuffer = Buffer.concat([this.frameBuffer, chunk]);
+    while (this.frameBuffer.length >= 2) {
+      const first = this.frameBuffer[0]!;
+      const second = this.frameBuffer[1]!;
+      const opcode = first & 0x0f;
+      let length = second & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (this.frameBuffer.length < 4) return;
+        length = this.frameBuffer.readUInt16BE(2);
+        offset = 4;
+      } else if (length === 127) {
+        this.rejectAll(new Error("Codex app-server sent an oversized websocket frame"));
+        this.close();
+        return;
+      }
+
+      const masked = Boolean(second & 0x80);
+      let mask: Buffer | undefined;
+      if (masked) {
+        if (this.frameBuffer.length < offset + 4) return;
+        mask = this.frameBuffer.subarray(offset, offset + 4);
+        offset += 4;
+      }
+      if (this.frameBuffer.length < offset + length) return;
+
+      let payload: Buffer = Buffer.from(this.frameBuffer.subarray(offset, offset + length));
+      this.frameBuffer = this.frameBuffer.subarray(offset + length);
+      if (mask) payload = unmask(payload, mask);
+
+      if (opcode === 0x1) this.handleJson(payload.toString("utf8"));
+      else if (opcode === 0x8) this.close();
+      else if (opcode === 0x9) this.socket.write(encodeWebSocketFrame(payload, 0xA));
+    }
+  }
+
+  private handleJson(text: string): void {
+    const message = JSON.parse(text) as Record<string, unknown>;
+    const id = typeof message.id === "string" ? message.id : undefined;
+    if (id && this.pending.has(id)) {
+      const pending = this.pending.get(id)!;
+      this.pending.delete(id);
+      clearTimeout(pending.timeout);
+      if (message.error) {
+        const error = message.error as { message?: unknown };
+        pending.reject(new Error(`${pending.method}: ${typeof error.message === "string" ? error.message : "request failed"}`));
+      } else {
+        pending.resolve(message.result);
+      }
+      return;
+    }
+
+    if (id && typeof message.method === "string") {
+      this.writeJson({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32000,
+          message: `loupe-bridge does not handle Codex app-server request ${message.method}`,
+        },
+      });
+    }
+  }
+
+  private rejectAll(error: Error): void {
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+      this.pending.delete(id);
+    }
+  }
+}
+
+function encodeWebSocketFrame(payload: Buffer, opcode: number): Buffer {
+  const mask = randomBytes(4);
+  let header: Buffer;
+  if (payload.length < 126) {
+    header = Buffer.from([0x80 | opcode, 0x80 | payload.length]);
+  } else if (payload.length < 65_536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  return Buffer.concat([header, mask, unmask(payload, mask)]);
+}
+
+function unmask(payload: Buffer, mask: Buffer): Buffer {
+  const out = Buffer.alloc(payload.length);
+  for (let i = 0; i < payload.length; i++) out[i] = payload[i]! ^ mask[i % 4]!;
+  return out;
 }

@@ -26,6 +26,10 @@ chrome.commands.onCommand.addListener((command) => {
 
 const RESTRICTED = ["chrome://", "chrome-extension://", "edge://", "about:", "https://chrome.google.com/webstore", "https://chromewebstore.google.com"];
 
+void chrome.storage.session
+  ?.setAccessLevel?.({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" })
+  .catch((e) => console.warn("[loupe] could not expose session storage to content scripts", e));
+
 /**
  * Send a toggle to the active tab's content script. If the content script isn't
  * there yet (e.g. the tab was open before the extension loaded), inject it on

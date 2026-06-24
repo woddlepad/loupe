@@ -112,6 +112,22 @@ Built-in agent modes:
   `{loupeCommand}`, `{codexUrl}`, and `{repoRoot}`.
 - `codex-app` opens a Codex Desktop thread with `/loupe <id-or-group>` and the
   repo path prefilled.
+- `codex-app-server` creates a Codex thread through the Codex app-server daemon
+  on the bridge machine. Use it for remote bridges when your local Codex app is
+  connected to that host over SSH. Set `LOUPE_CODEX_APP_SERVER=1` for the default
+  Codex action, or configure:
+
+```json
+{
+  "agents": {
+    "codex": {
+      "mode": "codex-app-server",
+      "socketPath": "/root/.codex/app-server-control/app-server-control.sock"
+    }
+  }
+}
+```
+
 - `session` only saves the annotation bundle for an already-open agent session.
 
 For phone-visible Codex Cloud tasks, use `codex cloud exec` in a spawn action:

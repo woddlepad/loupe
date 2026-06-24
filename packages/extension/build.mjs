@@ -86,8 +86,8 @@ function manifestFor(targetBrowser) {
   return manifest;
 }
 
-compileStyles();
 copyStatic();
+compileStyles();
 
 if (watch) {
   const ctx = await context(common);
