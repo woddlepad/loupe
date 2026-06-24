@@ -102,14 +102,15 @@ export interface Annotation {
   status?: AnnotationStatus;
   /**
    * Thread of follow-ups. The agent appends here when it implements the change
-   * (closing the loop); teammates can reply. Populated when reading a bundle.
+   * and moves it to needs_review; teammates can reply or resolve it. Populated
+   * when reading a bundle.
    */
   comments?: AnnotationComment[];
   /** base64 PNG data URL of the cropped screenshot (set by the background SW). */
   screenshotDataUrl?: string;
 }
 
-export type AnnotationStatus = "open" | "resolved";
+export type AnnotationStatus = "open" | "needs_review" | "resolved";
 
 /** A reference image attached to an annotation ("make it look like this"). */
 export interface AnnotationReference {

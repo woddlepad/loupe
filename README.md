@@ -119,10 +119,10 @@ Use $loupe to implement notes
 Use $loupe to implement dde8f08a
 ```
 
-When an agent finishes, it should mark each annotation resolved:
+When an agent finishes, it should move each annotation to review:
 
 ```sh
-loupe comment dde8f08a --status resolved --author agent:codex --body "Implemented: aligned shortcut keys. Checks: pnpm test."
+loupe comment dde8f08a --status needs_review --author agent:codex --body "Implemented: aligned shortcut keys. Checks: pnpm test."
 ```
 
 ## Why
@@ -149,7 +149,8 @@ vague vibe.
 - 🗂️ **Groups** — batch annotations (e.g. *notes UI refactor*) and dispatch the
   whole set to one agent session, no cross-contamination.
 - 💬 **Comment threads** — annotations are files, so the agent comments back
-  ("implemented, resolved") and you see it in the overlay. The loop closes.
+  ("implemented, needs review") and you see it in the overlay. You can comment
+  feedback or resolve the item yourself.
 - 🖼️ **Reference images** — paste a screenshot (e.g. from Notion) to say "make it
   look like *this*."
 - 🌐 **Cross-site references** — annotate *any* site. On a non-project origin
@@ -157,9 +158,10 @@ vague vibe.
   annotation later instead of copy-pasting. Project origins include remote hosts
   (your Tailscale tailnet, staging domains) — not just localhost.
 - 📌 **Live viewer** — a panel + numbered page pins showing every
-  open annotation, its thread, editable note, reference attachments, and a reply
-  box (`Alt+Shift+A`). Resolved annotations are hidden by default and can be
-  shown or bulk-deleted from the viewer.
+  annotation that needs review, plus this-page and all-pages views with its
+  thread, editable note, reference attachments, and a reply box (`Alt+Shift+A`).
+  Resolved annotations are hidden by default and can be shown or bulk-deleted
+  from the viewer.
 - 📦 **Committable** — everything lands in `.loupe/` as `png` + `md` + `json`.
   Commit it; teammates pull the open work.
 
@@ -226,7 +228,7 @@ loupe bridge [--repo <path>] [--port 7337] [--host 127.0.0.1]
 loupe init [--repo <path>] [--name <name>] [--origin <host[:port]>] [--port <port>]
 loupe list [--repo <path>] [--json]
 loupe show <group|annotation_id> [--repo <path>] [--json]
-loupe comment <annotation_id> --body "Implemented..." --status resolved [--repo <path>]
+loupe comment <annotation_id> --body "Implemented..." --status needs_review [--repo <path>]
 ```
 
 Run `loupe init` from a project root to auto-map the repo. It merges

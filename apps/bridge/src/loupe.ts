@@ -3,14 +3,14 @@ import { resolve } from "node:path";
 import { cpSync, existsSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AnnotationComment } from "@loupe/core/model";
+import type { AnnotationComment, AnnotationStatus } from "@loupe/core/model";
 import { createBridge } from "./server.js";
 import { loadConfig } from "./config.js";
 import { gitUserName } from "./git.js";
 import { initProject } from "./project.js";
 import { appendComment, groupSummaries, listAnnotations, type StoredAnnotation } from "./store.js";
 
-type Status = "open" | "resolved";
+const STATUS_VALUES = ["open", "needs_review", "resolved"] as const satisfies readonly AnnotationStatus[];
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -112,11 +112,10 @@ function show(args: string[]): void {
 
 function comment(args: string[]): void {
   const id = args.find((arg) => !arg.startsWith("-"));
-  if (!id) throw new Error("usage: loupe comment <annotation_id> --body <text> [--status open|resolved] [--repo <path>]");
+  if (!id) throw new Error("usage: loupe comment <annotation_id> --body <text> [--status open|needs_review|resolved] [--repo <path>]");
   const body = strFlag(args, "--body");
   if (!body) throw new Error("missing --body");
-  const status = strFlag(args, "--status") as Status | undefined;
-  if (status && status !== "open" && status !== "resolved") throw new Error("--status must be open or resolved");
+  const status = parseStatus(strFlag(args, "--status"));
   const repo = repoRoot(args);
   const entry: AnnotationComment = {
     author: strFlag(args, "--author") ?? gitUserName(repo),
@@ -185,7 +184,7 @@ function renderContext(repo: string, target: string, annotations: StoredAnnotati
     "- Use URL, selector, data attributes, visible text, and source hints to find the code.",
     "- If source is unresolved, search using route segments, data-testid values, labels, selected text, and classes.",
     "- Keep changes focused. Run relevant checks.",
-    "- When done, run `loupe comment <id> --status resolved --body \"Implemented: ... Checks: ...\"` for each implemented annotation.",
+    "- When done, run `loupe comment <id> --status needs_review --body \"Implemented: ... Checks: ...\"` for each implemented annotation.",
     "",
   ];
   annotations.forEach((a, i) => lines.push(renderAnnotation(repo, a, i + 1), ""));
@@ -267,6 +266,13 @@ function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
 }
 
+function parseStatus(value: string | undefined): AnnotationStatus | undefined {
+  if (!value) return undefined;
+  const normalized = value === "needs-review" ? "needs_review" : value;
+  if (STATUS_VALUES.includes(normalized as AnnotationStatus)) return normalized as AnnotationStatus;
+  throw new Error("--status must be open, needs_review, or resolved");
+}
+
 function help(): void {
   console.log(`loupe
 
@@ -275,7 +281,7 @@ Usage:
   loupe bridge [--repo <path>] [--port 7337] [--host 127.0.0.1]
   loupe list [--repo <path>] [--json]
   loupe show <group|annotation_id> [--repo <path>] [--json]
-  loupe comment <annotation_id> --body <text> [--status open|resolved] [--author agent:codex] [--repo <path>]
+  loupe comment <annotation_id> --body <text> [--status open|needs_review|resolved] [--author agent:codex] [--repo <path>]
   loupe install-skill
 
 Initialize a project once from its repo root:

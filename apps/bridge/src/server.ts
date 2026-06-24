@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, extname, resolve, sep } from "node:path";
-import type { Annotation, AnnotatePayload, AnnotationComment } from "@loupe/core/model";
+import type { Annotation, AnnotatePayload, AnnotationComment, AnnotationStatus } from "@loupe/core/model";
 import { runAgentGroup } from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
 import type { ActionOutcome } from "./actions/types.js";
@@ -16,6 +16,8 @@ import {
   createGroup,
   deleteGroup,
   deleteAnnotation,
+  deleteReference,
+  deleteReferencesForUrl,
   deleteResolvedAnnotations,
   groupSummaries,
   listAnnotations,
@@ -23,6 +25,7 @@ import {
   moveAnnotationToGroup,
   renameGroup,
   reorderGroups,
+  referenceImageDataUrl,
   updateAnnotation,
 } from "./store.js";
 
@@ -157,6 +160,12 @@ async function handleRequest(
   if (method === "GET" && path === "/references") {
     return json(res, 200, { references: listReferences(config.repoRoot) });
   }
+  const referenceImage = path.match(/^\/references\/([^/]+)\/image$/);
+  if (method === "GET" && referenceImage) {
+    const dataUrl = referenceImageDataUrl(config.repoRoot, decodeURIComponent(referenceImage[1]!));
+    if (!dataUrl) return json(res, 404, { error: "reference image not found" });
+    return json(res, 200, { dataUrl });
+  }
   if (method === "POST" && path === "/references") {
     return withBody(req, res, (b) => {
       const a = (JSON.parse(b) as { annotation: Annotation }).annotation;
@@ -165,6 +174,17 @@ async function handleRequest(
       console.log(`[loupe] reference ${ref.dir} (from ${a.url})`);
       return { id: ref.id, dir: ref.dir };
     });
+  }
+  if (method === "POST" && path === "/references/page/delete") {
+    return withBody(req, res, (b) => handleDeleteReferencesForPage(config, JSON.parse(b) as { url?: string }));
+  }
+  const referenceDelete = path.match(/^\/references\/([^/]+)$/);
+  if (method === "DELETE" && referenceDelete) {
+    return handleDeleteReference(res, config, decodeURIComponent(referenceDelete[1]!));
+  }
+  const referenceDeletePost = path.match(/^\/references\/([^/]+)\/delete$/);
+  if (method === "POST" && referenceDeletePost) {
+    return handleDeleteReference(res, config, decodeURIComponent(referenceDeletePost[1]!));
   }
 
   // POST /annotations/:id/comments
@@ -368,6 +388,21 @@ function handleDeleteGroup(res: ServerResponse, config: BridgeConfig, slug: stri
   return json(res, 200, { ok: true, count: result.count });
 }
 
+function handleDeleteReference(res: ServerResponse, config: BridgeConfig, id: string): void {
+  const ok = deleteReference(config.repoRoot, id);
+  if (!ok) return json(res, 404, { ok: false, error: `reference ${id} not found` });
+  console.log(`[loupe] deleted reference ${id}`);
+  return json(res, 200, { ok: true });
+}
+
+function handleDeleteReferencesForPage(config: BridgeConfig, body: { url?: string }) {
+  const url = body.url?.trim();
+  if (!url) throw new Error("missing reference page url");
+  const count = deleteReferencesForUrl(config.repoRoot, url);
+  console.log(`[loupe] deleted ${count} reference${count === 1 ? "" : "s"} from ${url}`);
+  return { ok: true, count };
+}
+
 function handleUpdateAnnotation(
   config: BridgeConfig,
   id: string,
@@ -431,16 +466,24 @@ function actionsWithSave(actions: string[]): string[] {
 
 function handleComment(config: BridgeConfig, id: string, body: Partial<AnnotationComment>) {
   if (!body.body) throw new Error("missing comment body");
+  const status = parseStatus(body.status);
   const comment: AnnotationComment = {
     author: commentAuthor(config.repoRoot, body.author),
     body: body.body,
     createdAt: body.createdAt || new Date().toISOString(),
-    ...(body.status ? { status: body.status } : {}),
+    ...(status ? { status } : {}),
   };
   const ok = appendComment(config.repoRoot, id, comment);
   if (!ok) throw new Error(`annotation ${id} not found`);
   console.log(`[loupe] comment on ${id} by ${comment.author}${comment.status ? ` → ${comment.status}` : ""}`);
   return { ok: true };
+}
+
+function parseStatus(value: unknown): AnnotationStatus | undefined {
+  if (!value) return undefined;
+  if (value === "needs-review") return "needs_review";
+  if (value === "open" || value === "needs_review" || value === "resolved") return value;
+  throw new Error("status must be open, needs_review, or resolved");
 }
 
 function commentAuthor(repoRoot: string, author: string | undefined): string {

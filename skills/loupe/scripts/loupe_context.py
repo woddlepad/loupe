@@ -93,7 +93,8 @@ def emit_context(repo: Path, target: str, bundles: list[dict[str, Any]]) -> None
     print("- Use URL, selector, data attributes, visible text, and source hints to find the code.")
     print("- If source is unresolved, search the repo using route segments, data-testid values, labels, and selected text.")
     print("- Keep changes focused. Run relevant checks.")
-    print("- When done, append a JSONL comment to each annotation's `comments.jsonl` with status `resolved`.\n")
+    print("- When done, run `loupe comment <id> --status needs_review --body \"Implemented: ... Checks: ...\"` for each annotation.")
+    print("- Do not mark annotations resolved yourself; leave resolution to the human reviewer.\n")
     for i, b in enumerate(bundles, 1):
         emit_bundle(b, i)
 

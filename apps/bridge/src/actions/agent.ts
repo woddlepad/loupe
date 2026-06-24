@@ -33,7 +33,7 @@ export function sessionOutcome(name: string, ctx: ActionContext): ActionOutcome 
 
 function runAgent(name: string, cmd: AgentCommand, ctx: ActionContext): ActionOutcome {
   if (!cmd.argv?.length) return { ok: false, detail: `${name}: no argv configured for spawn mode` };
-  const prompt = buildPrompt(ctx.annotation, ctx.bundle, ctx.resolution);
+  const prompt = buildPrompt(name, ctx.annotation, ctx.bundle, ctx.resolution);
   const images = [ctx.bundle.screenshot, ...ctx.bundle.references].filter((p): p is string => Boolean(p));
   return spawnAgent(
     name,
@@ -57,7 +57,7 @@ export function runAgentGroup(
   groupLogPath: string,
 ): ActionOutcome {
   if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, `/loupe ${group}`);
-  const prompt = buildGroupPrompt(group, annotations);
+  const prompt = buildGroupPrompt(name, group, annotations);
   return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath);
 }
 
@@ -153,12 +153,15 @@ function agentHint(name: string, cmd: AgentCommand): string {
   return `start a fresh ${name} session on this annotation`;
 }
 
-const CLOSE_LOOP =
-  "When done, append a comment to each annotation's comments.jsonl, e.g. " +
-  `printf '%s\\n' '{"author":"agent:${"$AGENT"}","body":"implemented","createdAt":"<iso>","status":"resolved"}' >> <bundleDir>/comments.jsonl — ` +
-  "so the annotation shows your result.";
+function closeLoop(agentName: string): string {
+  return (
+    "When done, run " +
+    `loupe comment <annotation_id> --status needs_review --author agent:${agentName} --body "Implemented: <summary>. Checks: <commands run>." ` +
+    "Do not mark the annotation resolved yourself; leave it for human review."
+  );
+}
 
-function buildPrompt(a: Annotation, bundle: WrittenBundle, r: SourceResolution): string {
+function buildPrompt(agentName: string, a: Annotation, bundle: WrittenBundle, r: SourceResolution): string {
   const chain = a.target.componentChain.map((c) => c.name).join(" › ") || "(unknown component)";
   const slot = a.target.dataAttributes["data-slot"];
   const suggestions = a.acceptedSuggestions.map((s) => `- ${s.label}: ${s.detail}`).join("\n");
@@ -183,13 +186,13 @@ function buildPrompt(a: Annotation, bundle: WrittenBundle, r: SourceResolution):
       : "",
     suggestions ? `Suggested fixes:\n${suggestions}` : "",
     "",
-    CLOSE_LOOP.replace("$AGENT", "you"),
+    closeLoop(agentName),
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function buildGroupPrompt(group: string, annotations: StoredAnnotation[]): string {
+function buildGroupPrompt(agentName: string, group: string, annotations: StoredAnnotation[]): string {
   const lines = annotations.map((a, i) => {
     const chain = a.target.componentChain.map((c) => c.name).join(" › ") || a.target.tag;
     return [
@@ -209,7 +212,7 @@ function buildGroupPrompt(group: string, annotations: StoredAnnotation[]): strin
     "",
     ...lines,
     "",
-    "After implementing each, append a comment to that item's comments.jsonl with status \"resolved\" so the annotation reflects the result. Then summarize the whole change set.",
+    `After implementing each, run \`loupe comment <id> --status needs_review --author agent:${agentName} --body "Implemented: ... Checks: ..."\`. Do not mark annotations resolved yourself; leave them for human review. Then summarize the whole change set.`,
   ].join("\n");
 }
 

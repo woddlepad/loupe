@@ -64,23 +64,23 @@ loupe init --origin staging.acme.com --port 5174
 4. If `resolution.primary` is empty, infer the source from the URL route, selector/data attributes, visible text, component names, and repo search. Search for stable anchors such as `data-testid`, page route segments, button labels, surrounding text, and class names.
 5. Implement the UI change. Keep scope tight to the annotation.
 6. Run the smallest relevant checks available in the repo.
-7. Append one JSON line to each implemented annotation's `comments.jsonl`:
+7. Mark each implemented annotation as needing human review:
 
-```json
-{"author":"agent:<agent-name>","body":"Implemented: <short summary>. Checks: <commands run>.","createdAt":"<iso timestamp>","status":"resolved"}
+```bash
+loupe comment <annotation_id> --status needs_review --author agent:<agent-name> --body "Implemented: <summary>. Checks: <commands run>."
 ```
 
 Use `agent:codex`, `agent:claude`, or another accurate agent name.
 
-If the `loupe` CLI is available, prefer:
+If the CLI is unavailable for commenting, append the equivalent JSON line to the annotation's `comments.jsonl`:
 
-```bash
-loupe comment <annotation_id> --status resolved --author agent:<agent-name> --body "Implemented: <summary>. Checks: <commands run>."
+```json
+{"author":"agent:<agent-name>","body":"Implemented: <short summary>. Checks: <commands run>.","createdAt":"<iso timestamp>","status":"needs_review"}
 ```
 
 ## Rules
 
-- Do not mark an annotation resolved until the code change is actually made.
+- Do not mark an annotation resolved; agents move completed work to `needs_review` and leave resolution to the human reviewer.
 - For a group, handle every open annotation in the group unless the user asks for a specific id.
 - Prefer existing app patterns over broad refactors.
 - When screenshot/reference images disagree with code text, prioritize the user's note plus screenshot.

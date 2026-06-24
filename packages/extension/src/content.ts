@@ -15,6 +15,7 @@ import type {
   CaptureResult,
   GroupsResult,
   LoupeMessage,
+  ReferenceImageResult,
   ReferenceItem,
   ReferencesResult,
   ResolveResult,
@@ -164,21 +165,14 @@ async function fetchLibrary(): Promise<LibraryItem[]> {
     id: r.id,
     caption: r.title || r.note || r.url || r.id,
     url: r.url,
+    createdAt: r.createdAt,
     thumbUrl: refImageUrl(r.dir),
   }));
 }
 
 async function resolveLibraryImage(id: string): Promise<string | null> {
-  const res = (await chrome.runtime.sendMessage({ type: "references" } satisfies LoupeMessage)) as ReferencesResult;
-  if (!res.ok) return null;
-  const item = res.references.find((r) => r.id === id);
-  if (!item) return null;
-  try {
-    const blob = await (await fetch(refImageUrl(item.dir))).blob();
-    return await blobToDataUrl(blob);
-  } catch {
-    return null;
-  }
+  const res = (await chrome.runtime.sendMessage({ type: "reference-image", id } satisfies LoupeMessage)) as ReferenceImageResult;
+  return res.ok ? res.dataUrl : null;
 }
 
 function refImageUrl(dir: string): string {
@@ -299,15 +293,6 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage) => {
 
 function nextFrame(): Promise<void> {
   return new Promise((r) => requestAnimationFrame(() => r()));
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
 }
 
 async function copyAgentPrompt(annotation: Annotation): Promise<string> {

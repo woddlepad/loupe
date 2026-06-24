@@ -4,18 +4,23 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import type { Annotation } from "@loupe/core/model";
-import { writeBundle } from "./bundle.js";
+import { writeBundle, writeReference } from "./bundle.js";
 import {
   addAnnotationReference,
+  appendComment,
   createGroup,
   deleteGroup,
+  deleteReference,
+  deleteReferencesForUrl,
   deleteResolvedAnnotations,
   groupSlug,
   groupSummaries,
   listAnnotations,
+  listReferences,
   moveAnnotationToGroup,
   renameGroup,
   reorderGroups,
+  referenceImageDataUrl,
   updateAnnotation,
 } from "./store.js";
 
@@ -61,6 +66,24 @@ test("updates saved annotation notes and appends references", () => {
   assert.match(note, /refs\/ref-1\.png/);
 });
 
+test("lists references by capture date, resolves images, and deletes library items", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-references-"));
+  writeReference(repo, { ...annotation("old-ref"), createdAt: "2026-06-21T00:00:00.000Z" });
+  writeReference(repo, { ...annotation("new-ref"), createdAt: "2026-06-23T00:00:00.000Z" });
+  writeReference(repo, {
+    ...annotation("other-ref"),
+    url: "http://example.com/ref",
+    createdAt: "2026-06-22T00:00:00.000Z",
+  });
+
+  assert.deepEqual(listReferences(repo).map((ref) => ref.id), ["new-ref", "other-ref", "old-ref"]);
+  assert.equal(referenceImageDataUrl(repo, "new-ref"), PNG_DATA_URL);
+  assert.equal(deleteReferencesForUrl(repo, "http://localhost:3000/page"), 2);
+  assert.deepEqual(listReferences(repo).map((ref) => ref.id), ["other-ref"]);
+  assert.equal(deleteReference(repo, "other-ref"), true);
+  assert.deepEqual(listReferences(repo), []);
+});
+
 test("deletes all resolved annotations", () => {
   const repo = mkdtempSync(join(tmpdir(), "loupe-resolved-"));
   writeBundle(repo, { ...annotation("open-1"), status: "open" }, { candidates: [], method: "none" });
@@ -69,6 +92,33 @@ test("deletes all resolved annotations", () => {
 
   assert.equal(deleteResolvedAnnotations(repo), 2);
   assert.deepEqual(listAnnotations(repo).map((a) => a.id), ["open-1"]);
+});
+
+test("agent completion comments move annotations to needs review, not resolved", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-agent-review-"));
+  writeBundle(repo, annotation("ann-1"), { candidates: [], method: "none" });
+
+  assert.equal(appendComment(repo, "ann-1", {
+    author: "agent:codex",
+    body: "implemented",
+    createdAt: "2026-06-22T00:01:00.000Z",
+    status: "resolved",
+  }), true);
+
+  let [stored] = listAnnotations(repo);
+  assert.equal(stored?.status, "needs_review");
+  assert.equal(stored?.comments?.[0]?.status, "needs_review");
+
+  assert.equal(appendComment(repo, "ann-1", {
+    author: "Dani",
+    body: "looks good",
+    createdAt: "2026-06-22T00:02:00.000Z",
+    status: "resolved",
+  }), true);
+
+  [stored] = listAnnotations(repo);
+  assert.equal(stored?.status, "resolved");
+  assert.equal(stored?.comments?.[1]?.status, "resolved");
 });
 
 test("deletes a group and removes it from ordering", () => {

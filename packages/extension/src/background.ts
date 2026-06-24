@@ -6,6 +6,7 @@ import type {
   GroupsResult,
   ListResult,
   LoupeMessage,
+  ReferenceImageResult,
   ReferencesResult,
   ResolveResult,
   SimpleResult,
@@ -158,6 +159,21 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .then((b) => sendResponse({ ok: true, references: b.references } satisfies ReferencesResult))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies ReferencesResult));
       return true;
+    case "reference-image":
+      bridgeGet(`/references/${encodeURIComponent(msg.id)}/image`, senderUrl(sender))
+        .then((b) => sendResponse({ ok: true, dataUrl: b.dataUrl } satisfies ReferenceImageResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies ReferenceImageResult));
+      return true;
+    case "delete-reference":
+      deleteReference(msg.id, senderUrl(sender))
+        .then(() => sendResponse({ ok: true } satisfies SimpleResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
+      return true;
+    case "delete-reference-page":
+      bridgePost("/references/page/delete", { url: msg.url }, senderUrl(sender))
+        .then((b) => sendResponse({ ok: true, detail: String(b.count ?? 0) } satisfies SimpleResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
+      return true;
     case "save-reference":
       bridgePost("/references", { annotation: msg.annotation }, msg.annotation.url || senderUrl(sender))
         .then((b) => sendResponse({ ok: true, detail: b.dir } satisfies SimpleResult))
@@ -272,6 +288,19 @@ async function deleteGroup(slug: string, pageUrl?: string): Promise<any> {
   } catch (deleteError) {
     try {
       return await bridgePost(`${path}/delete`, {}, pageUrl);
+    } catch (postError) {
+      throw new Error(`${String(deleteError)}; fallback ${String(postError)}`);
+    }
+  }
+}
+
+async function deleteReference(id: string, pageUrl?: string): Promise<void> {
+  const path = `/references/${encodeURIComponent(id)}`;
+  try {
+    await bridgeDelete(path, pageUrl);
+  } catch (deleteError) {
+    try {
+      await bridgePost(`${path}/delete`, {}, pageUrl);
     } catch (postError) {
       throw new Error(`${String(deleteError)}; fallback ${String(postError)}`);
     }

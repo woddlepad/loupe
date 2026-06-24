@@ -62,6 +62,45 @@ export function listReferences(repoRoot: string): StoredReference[] {
   return out.sort((a, b) => ((a.createdAt ?? "") < (b.createdAt ?? "") ? 1 : -1));
 }
 
+/** Find a reference library item's absolute dir by id. */
+export function findReferenceDir(repoRoot: string, id: string): string | undefined {
+  const root = resolve(repoRoot, ".loupe/references");
+  for (const slug of safeReaddir(root)) {
+    const absDir = join(root, slug);
+    if (readMeta(absDir)?.id === id) return absDir;
+  }
+  return undefined;
+}
+
+/** Read a reference library screenshot as a browser-ready data URL. */
+export function referenceImageDataUrl(repoRoot: string, id: string): string | undefined {
+  const absDir = findReferenceDir(repoRoot, id);
+  if (!absDir) return undefined;
+  const shot = join(absDir, "shot.png");
+  if (!existsSync(shot)) return undefined;
+  return `data:image/png;base64,${readFileSync(shot).toString("base64")}`;
+}
+
+/** Delete one reference library item by id. */
+export function deleteReference(repoRoot: string, id: string): boolean {
+  const absDir = findReferenceDir(repoRoot, id);
+  if (!absDir) return false;
+  rmSync(absDir, { recursive: true, force: true });
+  return true;
+}
+
+/** Delete every reference library item captured from an exact page URL. */
+export function deleteReferencesForUrl(repoRoot: string, url: string): number {
+  const trimmed = url.trim();
+  if (!trimmed) throw new Error("missing reference page url");
+  let count = 0;
+  for (const ref of listReferences(repoRoot)) {
+    if (ref.url !== trimmed) continue;
+    if (deleteReference(repoRoot, ref.id)) count++;
+  }
+  return count;
+}
+
 /** Walk `.loupe/annotations/<group>/<id>/` and read every bundle. */
 export function listAnnotations(repoRoot: string): StoredAnnotation[] {
   const root = resolve(repoRoot, ROOT);
@@ -288,15 +327,22 @@ export function addAnnotationReference(
 
 /**
  * Append a comment to an annotation's `comments.jsonl` and, if the comment
- * carries a status, update the annotation's meta. This is the loop-closing
- * channel: an agent appends "implemented" + status "resolved".
+ * carries a status, update the annotation's meta. Agent-authored completions
+ * always land in review instead of resolving the annotation on their own.
  */
 export function appendComment(repoRoot: string, id: string, comment: AnnotationComment): boolean {
   const absDir = findBundleDir(repoRoot, id);
   if (!absDir) return false;
-  appendFileSync(join(absDir, "comments.jsonl"), JSON.stringify(comment) + "\n");
-  if (comment.status) setStatus(absDir, comment.status);
+  const entry = normalizeAgentComment(comment);
+  appendFileSync(join(absDir, "comments.jsonl"), JSON.stringify(entry) + "\n");
+  if (entry.status) setStatus(absDir, entry.status);
   return true;
+}
+
+function normalizeAgentComment(comment: AnnotationComment): AnnotationComment {
+  if (comment.status !== "resolved") return comment;
+  if (!comment.author.trim().toLowerCase().startsWith("agent:")) return comment;
+  return { ...comment, status: "needs_review" };
 }
 
 function setStatus(absDir: string, status: AnnotationStatus): void {

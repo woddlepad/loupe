@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import type { ActionDescriptor } from "@loupe/core/model";
+import type { ActionDescriptor, AnnotationStatus } from "@loupe/core/model";
 import {
   ArrowUp,
   ChevronDown,
@@ -20,7 +20,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { GroupsResult, GroupSummary, ListResult, LoupeMessage, ReferenceItem, ReferencesResult, SimpleResult, StoredAnnotation } from "./messages.js";
+import type {
+  GroupsResult,
+  GroupSummary,
+  ListResult,
+  LoupeMessage,
+  ReferenceImageResult,
+  ReferenceItem,
+  ReferencesResult,
+  SimpleResult,
+  StoredAnnotation,
+} from "./messages.js";
 import { bridgeUrlForUrl, loadSettings } from "./settings.js";
 import {
   Badge,
@@ -52,14 +62,17 @@ export interface ViewerAppProps {
   onClose: () => void;
 }
 
+type ViewerFilter = "review" | "page" | "all" | "library";
+
 export function ViewerApp({ onClose }: ViewerAppProps) {
   const [annotations, setAnnotations] = React.useState<StoredAnnotation[]>([]);
+  const [references, setReferences] = React.useState<ReferenceItem[]>([]);
   const [actions, setActions] = React.useState<ActionDescriptor[]>([]);
   const [groups, setGroups] = React.useState<GroupSummary[]>([]);
   const [author, setAuthor] = React.useState("me");
   const [bridgeUrl, setBridgeUrl] = React.useState("http://localhost:7337");
   const [repoRoot, setRepoRoot] = React.useState<string | undefined>(undefined);
-  const [filter, setFilter] = React.useState<"page" | "all">("page");
+  const [filter, setFilter] = React.useState<ViewerFilter>("review");
   const [showResolved, setShowResolved] = React.useState(false);
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [collapsed, setCollapsed] = React.useState(false);
@@ -73,13 +86,15 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
   const [, forceLayout] = React.useReducer((n: number) => n + 1, 0);
 
   const reload = React.useCallback(async () => {
-    const [list, actionList, groupList, settings] = await Promise.all([
+    const [list, referenceList, actionList, groupList, settings] = await Promise.all([
       chrome.runtime.sendMessage({ type: "list" } satisfies LoupeMessage) as Promise<ListResult>,
+      chrome.runtime.sendMessage({ type: "references" } satisfies LoupeMessage) as Promise<ReferencesResult>,
       fetchActions(),
       fetchGroups(),
       loadSettings(),
     ]);
     setAnnotations(list.ok ? list.annotations : []);
+    setReferences(referenceList.ok ? referenceList.references : []);
     setActions(actionList);
     setGroups(groupList);
     setAuthor(settings.author);
@@ -119,7 +134,13 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
     return annotations.filter((a) => pageKey(a.url) === here);
   }, [annotations]);
 
-  const scoped = React.useMemo(() => (filter === "all" ? annotations : pageAnnotations), [annotations, filter, pageAnnotations]);
+  const reviewAnnotations = React.useMemo(() => annotations.filter((a) => a.status === "needs_review"), [annotations]);
+
+  const scoped = React.useMemo(() => {
+    if (filter === "library") return [];
+    if (filter === "review") return reviewAnnotations;
+    return filter === "all" ? annotations : pageAnnotations;
+  }, [annotations, filter, pageAnnotations, reviewAnnotations]);
 
   const visible = React.useMemo(() => {
     const base = showResolved ? scoped : scoped.filter((a) => a.status !== "resolved");
@@ -135,10 +156,13 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
     [pageAnnotations, showResolved],
   );
 
+  const reviewCount = reviewAnnotations.length;
+
   const allCount = React.useMemo(
     () => (showResolved ? annotations.length : annotations.filter((a) => a.status !== "resolved").length),
     [annotations, showResolved],
   );
+  const libraryCount = references.length;
 
   const allResolvedCount = annotations.filter((a) => a.status === "resolved").length;
   const scopedResolvedCount = scoped.filter((a) => a.status === "resolved").length;
@@ -157,6 +181,7 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
 
   const ctx: ViewerContext = {
     annotations,
+    references,
     actions,
     author,
     bridgeUrl,
@@ -249,8 +274,10 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
         <section className="fixed bottom-3 right-3 top-3 z-[2147483646] flex w-[420px] flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel/95 text-[13px] text-loupe-fg shadow-2xl shadow-black/50">
           <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-loupe-line px-3 py-2">
             <div className="flex items-center gap-1 rounded-xl border border-loupe-line bg-loupe-bg/60 p-1">
+              <SegmentButton active={filter === "review"} count={reviewCount} onClick={() => setFilter("review")}>Needs review</SegmentButton>
               <SegmentButton active={filter === "page"} count={pageCount} onClick={() => setFilter("page")}>This page</SegmentButton>
               <SegmentButton active={filter === "all"} count={allCount} onClick={() => setFilter("all")}>All pages</SegmentButton>
+              <SegmentButton active={filter === "library"} count={libraryCount} onClick={() => setFilter("library")}>Library</SegmentButton>
             </div>
             <div className="ml-auto" />
             <Button variant="ghost" size="icon" title="Collapse annotations" onClick={() => setCollapsed(true)}>
@@ -261,35 +288,44 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
             </Button>
           </header>
 
-          <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
-            <Button variant="secondary" size="xs" onClick={() => {
-              setShowResolved((v) => !v);
-              if (showResolved && active?.status === "resolved") setExpanded(null);
-            }}>
-              {showResolved ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              {showResolved ? "Hide resolved" : "Show resolved"}
-            </Button>
-            {allResolvedCount > 0 ? (
-              <DeleteResolvedButton count={allResolvedCount} onDone={async () => {
-                setExpanded(null);
-                await reload();
-              }} />
-            ) : null}
-            {groupVisibilityActive ? (
-              <Button variant="secondary" size="xs" onClick={ctx.clearGroupVisibility}>
-                <Eye className="h-3.5 w-3.5" />
-                Show all groups
+          {filter === "library" ? (
+            <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
+              <span className="text-[11px] text-loupe-muted">References are sorted by capture date.</span>
+              <span className="ml-auto text-[11px] text-loupe-faint">{references.length}</span>
+            </div>
+          ) : (
+            <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
+              <Button variant="secondary" size="xs" onClick={() => {
+                setShowResolved((v) => !v);
+                if (showResolved && active?.status === "resolved") setExpanded(null);
+              }}>
+                {showResolved ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {showResolved ? "Hide resolved" : "Show resolved"}
               </Button>
-            ) : null}
-            <span className="ml-auto text-[11px] text-loupe-faint">{visible.length}/{scoped.length}</span>
-          </div>
+              {allResolvedCount > 0 ? (
+                <DeleteResolvedButton count={allResolvedCount} onDone={async () => {
+                  setExpanded(null);
+                  await reload();
+                }} />
+              ) : null}
+              {groupVisibilityActive ? (
+                <Button variant="secondary" size="xs" onClick={ctx.clearGroupVisibility}>
+                  <Eye className="h-3.5 w-3.5" />
+                  Show all groups
+                </Button>
+              ) : null}
+              <span className="ml-auto text-[11px] text-loupe-faint">{visible.length}/{scoped.length}</span>
+            </div>
+          )}
 
           <div ref={listRef} className="flex-1 overflow-y-auto py-2">
-            {groupRows.length === 0 ? (
+            {filter === "library" ? (
+              <LibraryTab refs={references} ctx={ctx} />
+            ) : groupRows.length === 0 ? (
               <div className="px-6 py-12 text-center text-[12px] text-loupe-faint">
                 {scopedResolvedCount > 0 && !showResolved
                   ? "Only resolved annotations here"
-                  : filter === "page" ? "No annotations on this page yet" : "No annotations yet"}
+                  : filter === "review" ? "No annotations need review" : filter === "page" ? "No annotations on this page yet" : "No annotations yet"}
               </div>
             ) : (
               groupRows.map((row) => (
@@ -311,6 +347,7 @@ export function ViewerApp({ onClose }: ViewerAppProps) {
 
 interface ViewerContext {
   annotations: StoredAnnotation[];
+  references: ReferenceItem[];
   actions: ActionDescriptor[];
   author: string;
   bridgeUrl: string;
@@ -326,7 +363,7 @@ interface ViewerContext {
   focusGroup: (slug: string) => void;
   hideGroup: (slug: string) => void;
   setExpanded: (id: string | null) => void;
-  setFilter: (filter: "page" | "all") => void;
+  setFilter: (filter: ViewerFilter) => void;
   setCollapsed: (collapsed: boolean) => void;
   setDragOverGroup: (slug: string | null) => void;
   startGroupDrag: (slug: string) => void;
@@ -881,7 +918,6 @@ function providerColorClass(action: ActionDescriptor | undefined): string {
 
 function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
   const isExpanded = ctx.expanded === annotation.id;
-  const resolved = annotation.status === "resolved";
   const comments = annotation.comments?.length ?? 0;
   const thumb = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
   const otherPage = pageKey(annotation.url) !== pageKey(location.href);
@@ -909,7 +945,7 @@ function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx:
           <div className="truncate text-[12.5px] font-medium text-loupe-fg">{componentCrumb(annotation)}</div>
           {annotation.note ? <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-loupe-muted">{annotation.note}</div> : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <Badge tone={resolved ? "resolved" : "open"}>{resolved ? "Resolved" : "Open"}</Badge>
+            <Badge tone={statusTone(annotation.status)}>{statusLabel(annotation.status)}</Badge>
             <Badge><MessageSquare className="h-3 w-3" />{comments}</Badge>
             {otherPage ? <Badge>{hostLabel(annotation.url)}</Badge> : null}
           </div>
@@ -936,20 +972,9 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
   const [reply, setReply] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [commenting, setCommenting] = React.useState(false);
-  const [refs, setRefs] = React.useState<ReferenceItem[]>([]);
   const [refNotice, setRefNotice] = React.useState<{ tone: "ok" | "error" | "muted"; text: string } | null>(null);
   const fileRef = React.useRef<HTMLInputElement | null>(null);
   const meta = annotation as StoredAnnotation & { resolution?: { primary?: string } };
-
-  React.useEffect(() => {
-    let alive = true;
-    void chrome.runtime.sendMessage({ type: "references" } satisfies LoupeMessage).then((res: ReferencesResult) => {
-      if (alive && res.ok) setRefs(res.references);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   async function save() {
     setSaving(true);
@@ -962,7 +987,7 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
     if (r.ok) await ctx.reload();
   }
 
-  async function post(body: string, status?: "open" | "resolved") {
+  async function post(body: string, status?: AnnotationStatus) {
     if (!body) return;
     setCommenting(true);
     const r = (await chrome.runtime.sendMessage({
@@ -1026,12 +1051,11 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
         <LibraryReferenceDialog
           bridgeUrl={ctx.bridgeUrl}
           repoRoot={ctx.repoRoot}
-          refs={refs}
+          refs={ctx.references}
           onAttach={async (ref) => {
-            await addReference(
-              await urlToDataUrl(fileUrl(ctx.bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot })),
-              ref.note || ref.title || "library reference",
-            );
+            const image = (await chrome.runtime.sendMessage({ type: "reference-image", id: ref.id } satisfies LoupeMessage)) as ReferenceImageResult;
+            if (!image.ok) throw new Error(image.error);
+            await addReference(image.dataUrl, ref.note || ref.title || "library reference");
           }}
         />
       </div>
@@ -1050,21 +1074,21 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
       <div className="mt-2 space-y-1.5">
         {(annotation.comments ?? []).map((comment, index) => (
           <div key={`${comment.createdAt}-${index}`} className="rounded-xl border border-loupe-line bg-loupe-bg/60 px-2.5 py-1.5">
-            <div className="mb-0.5 text-[10.5px] text-loupe-faint">{comment.author} · {timeAgo(comment.createdAt)}{comment.status ? ` · ${comment.status}` : ""}</div>
+            <div className="mb-0.5 text-[10.5px] text-loupe-faint">{comment.author} · {timeAgo(comment.createdAt)}{comment.status ? ` · ${statusLabel(comment.status)}` : ""}</div>
             <div className="whitespace-pre-wrap text-[12px] leading-snug text-loupe-fg/90">{comment.body}</div>
           </div>
         ))}
       </div>
       <div className="mt-2 flex items-center gap-1.5">
-        <Input value={reply} onChange={(e) => setReply(e.target.value)} placeholder="comment..." onKeyDown={(e) => {
-          if (e.key === "Enter") void post(reply);
+        <Input value={reply} onChange={(e) => setReply(e.target.value)} placeholder={annotation.status === "needs_review" ? "feedback..." : "comment..."} onKeyDown={(e) => {
+          if (e.key === "Enter") void post(reply, annotation.status === "needs_review" ? "open" : undefined);
         }} />
         <Button
           variant="secondary"
           size="icon"
           className="shrink-0"
           disabled={commenting || !reply.trim()}
-          onClick={() => void post(reply)}
+          onClick={() => void post(reply, annotation.status === "needs_review" ? "open" : undefined)}
           aria-label={commenting ? "Sending comment" : "Comment"}
           title="Comment"
         >
@@ -1081,6 +1105,114 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
           await ctx.reload();
         }} />
       </div>
+    </div>
+  );
+}
+
+function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }) {
+  const [query, setQuery] = React.useState("");
+  const [deleting, setDeleting] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const groups = React.useMemo(() => filterReferencesByPage(refs, query), [refs, query]);
+
+  async function deleteItem(ref: ReferenceItem) {
+    if (!window.confirm("Delete this library reference?")) return;
+    setDeleting(ref.id);
+    setError(null);
+    const r = (await chrome.runtime.sendMessage({ type: "delete-reference", id: ref.id } satisfies LoupeMessage)) as SimpleResult;
+    setDeleting(null);
+    if (!r.ok) {
+      setError(r.error || "couldn't delete reference");
+      return;
+    }
+    await ctx.reload();
+  }
+
+  async function deletePage(url: string, count: number) {
+    if (!window.confirm(`Delete ${count} reference${count === 1 ? "" : "s"} from this page?`)) return;
+    setDeleting(url);
+    setError(null);
+    const r = (await chrome.runtime.sendMessage({ type: "delete-reference-page", url } satisfies LoupeMessage)) as SimpleResult;
+    setDeleting(null);
+    if (!r.ok) {
+      setError(r.error || "couldn't delete page references");
+      return;
+    }
+    await ctx.reload();
+  }
+
+  return (
+    <div className="space-y-3 px-3 pb-3">
+      <Input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search library" />
+      {error ? (
+        <div className="rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-[12px] text-loupe-fg">{error}</div>
+      ) : null}
+      {refs.length === 0 ? (
+        <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
+          No saved references yet
+        </div>
+      ) : groups.length === 0 ? (
+        <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
+          No matches
+        </div>
+      ) : (
+        groups.map((group) => (
+          <section key={group.url} className="overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg/35">
+            <div className="flex items-start gap-2 border-b border-loupe-line px-3 py-2">
+              <div className="min-w-0">
+                <div className="line-clamp-1 text-[12px] font-semibold text-loupe-fg">{group.title || hostLabel(group.url)}</div>
+                <div className="mt-0.5 line-clamp-1 text-[10.5px] text-loupe-faint">{group.url}</div>
+              </div>
+              <Badge className="ml-auto shrink-0">{group.items.length}</Badge>
+              <Button
+                variant="danger"
+                size="xs"
+                className="shrink-0"
+                disabled={deleting !== null}
+                onClick={() => void deletePage(group.url, group.items.length)}
+                title="Delete page references"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Page
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2">
+              {group.items.map((ref) => {
+                const src = fileUrl(ctx.bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
+                return (
+                  <article key={ref.id} className="overflow-hidden rounded-lg border border-loupe-line bg-loupe-panel/55">
+                    <button type="button" className="block aspect-[16/9] w-full border-b border-loupe-line bg-black/40" onClick={() => ctx.setLightbox(src)}>
+                      <img src={src} alt="" className="h-full w-full object-cover" />
+                    </button>
+                    <div className="space-y-1 p-2.5">
+                      <div className="line-clamp-1 text-[12px] font-medium text-loupe-fg">{ref.note || ref.title || "Untitled reference"}</div>
+                      <div className="text-[10.5px] text-loupe-faint">{formatCaptureDate(ref.createdAt)}</div>
+                      <div className="flex items-center gap-1.5 pt-1">
+                        {ref.url ? (
+                          <Button variant="secondary" size="xs" onClick={() => window.open(ref.url, "_blank", "noopener,noreferrer")}>
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open
+                          </Button>
+                        ) : null}
+                        <Button
+                          className="ml-auto"
+                          variant="danger"
+                          size="xs"
+                          disabled={deleting !== null}
+                          onClick={() => void deleteItem(ref)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          {deleting === ref.id ? "Deleting..." : "Delete"}
+                        </Button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ))
+      )}
     </div>
   );
 }
@@ -1235,6 +1367,7 @@ function LibraryReferenceDialog({
                                   {ref.note || ref.title || "Untitled reference"}
                                 </div>
                                 <div className="line-clamp-1 text-[10.5px] text-loupe-faint">{ref.url || ref.id}</div>
+                                <div className="text-[10.5px] text-loupe-faint">{formatCaptureDate(ref.createdAt)}</div>
                                 <div className="pt-1 text-[11px] font-medium text-loupe-muted group-hover:text-loupe-fg">
                                   {attaching === ref.id ? "Attaching..." : "Attach"}
                                 </div>
@@ -1308,7 +1441,7 @@ function Pins({
   showResolved: boolean;
   expanded: string | null;
   setExpanded: (id: string | null) => void;
-  setFilter: (filter: "page" | "all") => void;
+  setFilter: (filter: ViewerFilter) => void;
   setCollapsed: (collapsed: boolean) => void;
 }) {
   const here = pageKey(location.href);
@@ -1399,6 +1532,18 @@ function Logo() {
       <Search className="h-4 w-4 text-loupe-muted" />
     </span>
   );
+}
+
+function statusLabel(status: AnnotationStatus | undefined): string {
+  if (status === "needs_review") return "Needs review";
+  if (status === "resolved") return "Resolved";
+  return "Open";
+}
+
+function statusTone(status: AnnotationStatus | undefined): "open" | "needs_review" | "resolved" {
+  if (status === "needs_review") return "needs_review";
+  if (status === "resolved") return "resolved";
+  return "open";
 }
 
 function BrandFooter() {
@@ -1545,15 +1690,61 @@ function filterReferencesByDomain(refs: ReferenceItem[], query: string): Array<[
   for (const ref of refs) {
     const key = hostLabel(ref.url);
     const domainMatch = normalizeSearch(key).includes(q);
-    const refMatch = [ref.note, ref.title, ref.url, ref.id].some((value) => normalizeSearch(value).includes(q));
+    const refMatch = referenceMatches(ref, q);
     if (q && !domainMatch && !refMatch) continue;
     (map.get(key) ?? map.set(key, []).get(key)!).push(ref);
   }
-  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+  return [...map.entries()]
+    .map(([domain, items]) => [domain, sortReferencesByCapture(items)] as [string, ReferenceItem[]])
+    .sort(([, a], [, b]) => referenceTime(b[0]) - referenceTime(a[0]));
+}
+
+interface ReferencePageGroup {
+  url: string;
+  title: string;
+  items: ReferenceItem[];
+}
+
+function filterReferencesByPage(refs: ReferenceItem[], query: string): ReferencePageGroup[] {
+  const q = normalizeSearch(query);
+  const map = new Map<string, ReferencePageGroup>();
+  for (const ref of refs) {
+    const url = ref.url || "Unknown source";
+    const pageMatch = normalizeSearch(url).includes(q) || normalizeSearch(ref.title).includes(q) || normalizeSearch(hostLabel(ref.url)).includes(q);
+    if (q && !pageMatch && !referenceMatches(ref, q)) continue;
+    const existing = map.get(url) ?? { url, title: ref.title || hostLabel(ref.url), items: [] };
+    if (!existing.title && ref.title) existing.title = ref.title;
+    existing.items.push(ref);
+    map.set(url, existing);
+  }
+  return [...map.values()]
+    .map((group) => ({ ...group, items: sortReferencesByCapture(group.items) }))
+    .sort((a, b) => referenceTime(b.items[0]) - referenceTime(a.items[0]));
+}
+
+function sortReferencesByCapture(refs: ReferenceItem[]): ReferenceItem[] {
+  return [...refs].sort((a, b) => referenceTime(b) - referenceTime(a));
+}
+
+function referenceMatches(ref: ReferenceItem, query: string): boolean {
+  if (!query) return true;
+  return [ref.note, ref.title, ref.url, ref.id, ref.createdAt].some((value) => normalizeSearch(value).includes(query));
+}
+
+function referenceTime(ref: ReferenceItem | undefined): number {
+  const time = Date.parse(ref?.createdAt ?? "");
+  return Number.isNaN(time) ? 0 : time;
 }
 
 function normalizeSearch(value: string | undefined): string {
   return (value ?? "").toLowerCase().trim();
+}
+
+function formatCaptureDate(iso: string | undefined): string {
+  if (!iso) return "Capture date unknown";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "Capture date unknown";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function componentCrumb(a: StoredAnnotation): string {
@@ -1618,10 +1809,4 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-}
-
-async function urlToDataUrl(url: string): Promise<string> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`reference image responded ${res.status}`);
-  return fileToDataUrl(new File([await res.blob()], "reference.png"));
 }

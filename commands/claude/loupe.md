@@ -19,10 +19,11 @@ Then:
 3. Use the URL, selector, data attributes, visible text, source hints, and screenshot to locate the UI code.
 4. Implement the requested annotation or group with minimal unrelated changes.
 5. Run relevant checks.
-6. Mark each completed annotation resolved:
+6. Mark each completed annotation as needing human review:
 
 ```bash
-loupe comment <annotation_id> --status resolved --author agent:claude --body "Implemented: <summary>. Checks: <commands run>."
+loupe comment <annotation_id> --status needs_review --author agent:claude --body "Implemented: <summary>. Checks: <commands run>."
 ```
 
 If the CLI is unavailable for commenting, append the equivalent JSON line to the annotation's `comments.jsonl`.
+Do not mark annotations resolved; the human reviewer will comment with feedback or resolve them.

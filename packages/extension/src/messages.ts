@@ -31,6 +31,9 @@ export type LoupeMessage =
   | { type: "group-run"; slug: string; action: string }
   | { type: "resolve-target"; target: AnnotationTarget }
   | { type: "references" }
+  | { type: "reference-image"; id: string }
+  | { type: "delete-reference"; id: string }
+  | { type: "delete-reference-page"; url: string }
   | { type: "save-reference"; annotation: Annotation };
 
 export interface ReferenceItem {
@@ -38,6 +41,7 @@ export interface ReferenceItem {
   url?: string;
   title?: string;
   note?: string;
+  createdAt?: string;
   dir: string;
 }
 
@@ -63,6 +67,9 @@ export type ListResult =
   | { ok: false; error: string };
 export type ReferencesResult =
   | { ok: true; references: ReferenceItem[] }
+  | { ok: false; error: string };
+export type ReferenceImageResult =
+  | { ok: true; dataUrl: string }
   | { ok: false; error: string };
 export type SimpleResult = { ok: true; detail?: string } | { ok: false; error: string };
 export type CaptureResult = { ok: true; dataUrl: string } | { ok: false; error: string };

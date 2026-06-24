@@ -48,13 +48,14 @@ export function Badge({
   className,
   tone = "muted",
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { tone?: "muted" | "open" | "resolved" }) {
+}: React.HTMLAttributes<HTMLSpanElement> & { tone?: "muted" | "open" | "needs_review" | "resolved" }) {
   return (
     <span
       className={cn(
         "inline-flex h-5 items-center gap-1 rounded-md border px-1.5 text-[10.5px] leading-none",
         tone === "muted" && "border-loupe-line bg-loupe-bg/70 text-loupe-faint",
         tone === "open" && "border-loupe-accent/25 bg-loupe-accent/10 text-loupe-muted",
+        tone === "needs_review" && "border-amber-300/30 bg-amber-300/10 text-amber-100",
         tone === "resolved" && "border-white/20 bg-white/10 text-loupe-muted",
         className,
       )}
