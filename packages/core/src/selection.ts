@@ -207,6 +207,7 @@ export class LoupeOverlay {
   private cursorStyle: HTMLStyleElement | null = null;
   private editingDocument: Document | null = null;
   private noteTextarea: HTMLTextAreaElement | null = null;
+  private panelResizeObserver: ResizeObserver | null = null;
 
   constructor(options: LoupeOverlayOptions) {
     this.opts = {
@@ -293,6 +294,8 @@ export class LoupeOverlay {
   }
 
   private unmount(): void {
+    this.panelResizeObserver?.disconnect();
+    this.panelResizeObserver = null;
     this.noteTextarea?.remove();
     this.noteTextarea = null;
     this.editingDocument = null;
@@ -302,6 +305,8 @@ export class LoupeOverlay {
   }
 
   private clearLayer(): void {
+    this.panelResizeObserver?.disconnect();
+    this.panelResizeObserver = null;
     this.noteTextarea?.remove();
     this.noteTextarea = null;
     this.editingDocument = null;
@@ -757,9 +762,21 @@ export class LoupeOverlay {
 
     layer.append(panel);
     frameDoc.body.append(layer);
-    placePanel(panel, this.current);
+    this.trackPanelPlacement(panel);
     this.reportDraft();
     setTimeout(() => textarea.focus(), 0);
+  }
+
+  private trackPanelPlacement(panel: HTMLElement): void {
+    this.panelResizeObserver?.disconnect();
+    const place = () => {
+      if (!panel.isConnected || this.phase !== "editing") return;
+      placePanel(panel, this.current);
+    };
+    place();
+    requestAnimationFrame(place);
+    this.panelResizeObserver = new ResizeObserver(place);
+    this.panelResizeObserver.observe(panel);
   }
 
   /** Read an image file to a data URL, store it, and render a thumbnail chip. */
@@ -1409,21 +1426,54 @@ function capitalizeFirst(label: string): string {
 
 function placePanel(panel: HTMLElement, rect: Rect): void {
   const margin = 12;
-  const width = 340;
-  const availableHeight = Math.max(160, window.innerHeight - margin * 2);
-  panel.style.maxHeight = `${availableHeight}px`;
-  panel.style.overflowY = "auto";
+  const frameViewport = panel.ownerDocument.defaultView;
+  const viewportWidth = frameViewport?.innerWidth || window.innerWidth;
+  const viewportHeight = frameViewport?.innerHeight || window.innerHeight;
+  const width = panel.offsetWidth || 340;
+  const availableHeight = Math.max(160, viewportHeight - margin * 2);
+
   let left = rect.x + rect.width + margin;
-  if (left + width > window.innerWidth) left = Math.max(margin, rect.x - width - margin);
-  let top = rect.y;
+  if (left + width + margin > viewportWidth) {
+    const leftSide = rect.x - width - margin;
+    left = leftSide >= margin ? leftSide : clamp(rect.x, margin, viewportWidth - width - margin);
+  }
+
   // offsetHeight is the layout height; getBoundingClientRect would shrink with
   // the panel's scale-in animation and mis-place a tall panel near the edges.
-  const measuredHeight = panel.offsetHeight || 300;
-  if (top + measuredHeight + margin > window.innerHeight) {
-    top = Math.max(margin, window.innerHeight - measuredHeight - margin);
+  const naturalHeight = panel.scrollHeight || panel.offsetHeight || 300;
+  const panelHeight = Math.min(naturalHeight, availableHeight);
+  const fitsAligned = rect.y + panelHeight + margin <= viewportHeight;
+  let top = rect.y;
+  if (!fitsAligned) {
+    const aboveTop = rect.y - panelHeight - margin;
+    top = aboveTop >= margin
+      ? aboveTop
+      : clamp(rect.y + rect.height - panelHeight, margin, viewportHeight - panelHeight - margin);
   }
+
+  if (naturalHeight > panelHeight) {
+    panel.style.maxHeight = `${panelHeight}px`;
+    panel.style.overflowY = "auto";
+  } else {
+    panel.style.maxHeight = "";
+    panel.style.overflowY = "visible";
+  }
+
   panel.style.left = `${left}px`;
   panel.style.top = `${top}px`;
+
+  const renderedWidth = panel.offsetWidth || width;
+  const renderedHeight = panel.offsetHeight || panelHeight;
+  if (top + renderedHeight + margin > viewportHeight) {
+    panel.style.top = `${clamp(viewportHeight - renderedHeight - margin, margin, viewportHeight - renderedHeight - margin)}px`;
+  }
+  if (left + renderedWidth + margin > viewportWidth) {
+    panel.style.left = `${clamp(viewportWidth - renderedWidth - margin, margin, viewportWidth - renderedWidth - margin)}px`;
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
 function labelTop(rect: Rect): number {
