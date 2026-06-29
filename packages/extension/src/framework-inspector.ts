@@ -8,7 +8,7 @@ window.addEventListener(INSPECT_REQUEST, (event) => {
   const detail = (event as CustomEvent<FrameworkInspectRequest>).detail;
   if (!detail?.id) return;
 
-  const element = document.querySelector(`[${INSPECT_ATTR}="${cssEscapeAttr(detail.id)}"]`);
+  const element = findInspectElement(detail.id);
   const componentChain = element ? componentChainFor(element) : [];
   window.dispatchEvent(
     new CustomEvent<FrameworkInspectResponse>(INSPECT_RESPONSE, {
@@ -26,7 +26,15 @@ interface FrameworkInspectResponse {
   componentChain: ComponentRef[];
 }
 
-function cssEscapeAttr(value: string): string {
-  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(value);
-  return value.replace(/["\\]/g, "\\$&");
+function findInspectElement(id: string): Element | null {
+  const root = document.documentElement;
+  if (!root) return null;
+  if (root.getAttribute(INSPECT_ATTR) === id) return root;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const element = node as Element;
+    if (element.getAttribute(INSPECT_ATTR) === id) return element;
+  }
+  return null;
 }
