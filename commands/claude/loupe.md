@@ -23,7 +23,14 @@ Then:
 3. Use the URL, selector, data attributes, visible text, source hints, and screenshot to locate the UI code.
 4. Implement the requested annotation or group with minimal unrelated changes.
 5. Run relevant checks.
-6. Mark each completed annotation as needing human review:
+6. Give each annotation a concise, human-readable title (5–8 words describing the
+   change, not the component name) so it's easy to recognize later in the backlog:
+
+```bash
+loupe title <annotation_id> "Idle voice waveform on call preview"
+```
+
+7. Mark each completed annotation as needing human review:
 
 ```bash
 loupe status <annotation_id> --status needs_review --author agent:claude

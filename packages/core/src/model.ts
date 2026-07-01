@@ -49,25 +49,6 @@ export interface AnnotationTarget {
   elementRect?: Rect;
 }
 
-/** A computed suggestion chip offered to the user before they write a note. */
-export interface Suggestion {
-  /** Stable key, e.g. "padding", "spacing", "typography". */
-  kind: SuggestionKind;
-  /** Human label shown on the chip, e.g. "fix padding". */
-  label: string;
-  /** Short rationale shown on hover / sent to the agent if selected. */
-  detail: string;
-}
-
-export type SuggestionKind =
-  | "padding"
-  | "spacing"
-  | "typography"
-  | "alignment"
-  | "contrast"
-  | "radius"
-  | "size";
-
 /** One console call captured while a flow recording is running. */
 export interface ConsoleEntry {
   level: "log" | "info" | "warn" | "error" | "debug";
@@ -90,6 +71,18 @@ export interface NetworkEntry {
   kind: "fetch" | "xhr";
   /** Network/exception message when the request never completed. */
   error?: string;
+  /** Request headers as `[name, value]` pairs (sensitive ones redacted). */
+  requestHeaders?: [string, string][];
+  /** Request body, when it was a readable string; truncated if oversized. */
+  requestBody?: string;
+  /** Response headers as `[name, value]` pairs. */
+  responseHeaders?: [string, string][];
+  /** Response content-type, surfaced for quick JSON/text detection. */
+  responseContentType?: string;
+  /** Response body text, when readable; truncated if oversized. */
+  responseBody?: string;
+  /** Whether the request/response body was cut off at the capture cap. */
+  bodyTruncated?: { request?: boolean; response?: boolean };
   /** Milliseconds since the recording started. */
   t: number;
 }
@@ -167,6 +160,13 @@ export interface Annotation {
   url: string;
   /** Page title at capture time. */
   title: string;
+  /**
+   * Short human-readable name for the annotation, shown as its headline in the
+   * viewer and used to browse a backlog. Empty at capture time (the viewer falls
+   * back to the component crumb); the human or a dispatched agent sets it to
+   * something descriptive once the intent of the change is clear.
+   */
+  label?: string;
   /** Selection rectangle in CSS pixels. */
   rect: Rect;
   /** Device pixel ratio, so the bridge can reason about the screenshot scale. */
@@ -175,8 +175,6 @@ export interface Annotation {
   scroll?: { x: number; y: number };
   /** What was under the selection. */
   target: AnnotationTarget;
-  /** Suggestions the user accepted (subset of what was offered). */
-  acceptedSuggestions: Suggestion[];
   /** Free-form note. */
   note: string;
   /**

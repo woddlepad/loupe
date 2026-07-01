@@ -5,4 +5,4 @@ export { captureTarget, cssSelector, dominantElement, rectOf } from "./capture.j
 export { findAnchorElement, resolveAnchorRect } from "./anchor.js";
 export type { AnchoredRect } from "./anchor.js";
 export { componentChainFor, isComponentFrameworkPage, isReactPage, isVuePage } from "./framework-adapter.js";
-export { suggestionsFor } from "./suggestions.js";
+export { LibraryPicker } from "./library-picker.js";

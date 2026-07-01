@@ -8,7 +8,13 @@ import { usePortalContainer } from "../../lib/portal"
 function DropdownMenu({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
+  // Default to non-modal. Loupe renders these menus inside the viewer's panel
+  // iframe; Radix's modal mode traps focus and sets `pointer-events: none` on
+  // the (iframe) body, which — across the iframe/shadow boundary — swallows the
+  // first trigger click (double-click-to-open) and blocks the rest of the panel
+  // until dismissed. Non-modal keeps outside-click dismissal while leaving the
+  // surrounding UI interactive. Callers can still pass `modal` to override.
+  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" modal={false} {...props} />
 }
 
 function DropdownMenuTrigger({

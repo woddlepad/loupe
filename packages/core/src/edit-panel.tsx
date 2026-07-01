@@ -13,23 +13,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import {
-  AlignHorizontalSpaceAround,
-  CaseSensitive,
   Check,
   ChevronDown,
-  ChevronRight,
-  Contrast,
   ImagePlus,
   Library,
-  Maximize2,
-  Move,
-  Rows3,
-  SquareRoundCorner,
   X,
 } from "lucide-react";
 import { Button, PortalContainerProvider, Textarea } from "@loupe/ui";
 import { C, GITHUB_LOGO_SVG, GITHUB_REPO_URL, LOUPE_LOGO_SVG } from "./overlay-classes.js";
-import type { ActionDescriptor, AnnotationTarget, Rect, Suggestion, SuggestionKind } from "./model.js";
+import { LibraryPicker } from "./library-picker.js";
+import type { ActionDescriptor, AnnotationTarget, Rect } from "./model.js";
 import type { LibraryItem } from "./selection.js";
 
 const CLAUDE_LOGO_SVG =
@@ -76,11 +69,6 @@ export interface LoupeEditPanelProps {
   group: string;
   onGroupChange: (value: string) => void;
   onCreateGroup: (name: string) => void | Promise<void>;
-
-  // Suggestion chips (annotate).
-  suggestions?: Suggestion[];
-  acceptedKinds?: SuggestionKind[];
-  onToggleSuggestion?: (kind: SuggestionKind) => void;
 
   // Reference-image row (annotate).
   showRefs?: boolean;
@@ -133,9 +121,6 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
     group,
     onGroupChange,
     onCreateGroup,
-    suggestions,
-    acceptedKinds,
-    onToggleSuggestion,
     showRefs,
     refs,
     onAddFiles,
@@ -212,27 +197,6 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
           />
         ) : null}
 
-        {suggestions && suggestions.length > 0 ? (
-          <div className={C.chips}>
-            {suggestions.map((s) => {
-              const on = acceptedKinds?.includes(s.kind) ?? false;
-              return (
-                <button
-                  key={s.kind}
-                  type="button"
-                  className={C.chip}
-                  data-on={on ? "true" : "false"}
-                  title={s.detail}
-                  onClick={() => onToggleSuggestion?.(s.kind)}
-                >
-                  <SuggestionIcon kind={s.kind} />
-                  <span>{s.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
-
         <Textarea
           className="mt-2.5 resize-y text-[13px]"
           placeholder={placeholder}
@@ -253,6 +217,7 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
             library={library ?? []}
             resolveLibraryImage={resolveLibraryImage}
             onAttach={onAttachLibraryImage}
+            portalContainer={props.portalContainer}
           />
         ) : null}
 
@@ -471,6 +436,7 @@ function RefsRow({
   library,
   resolveLibraryImage,
   onAttach,
+  portalContainer,
 }: {
   refs: EditPanelReference[];
   onAddFiles?: (files: File[]) => void;
@@ -478,6 +444,7 @@ function RefsRow({
   library: LibraryItem[];
   resolveLibraryImage?: (id: string) => Promise<string | null>;
   onAttach?: (dataUrl: string) => void;
+  portalContainer?: HTMLElement | null;
 }): ReactElement {
   const [pickerOpen, setPickerOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -509,6 +476,7 @@ function RefsRow({
         />
         {refs.map((ref, i) => (
           <div key={i} className={C.refThumb}>
+            <img className={C.refImgBlur} src={ref.dataUrl} alt="" aria-hidden />
             <img className={C.refImg} src={ref.dataUrl} alt="" />
             <button type="button" className={C.refRemove} onClick={() => onRemoveRef?.(i)}>
               ✕
@@ -518,156 +486,17 @@ function RefsRow({
       </div>
       {pickerOpen && resolveLibraryImage ? (
         <LibraryPicker
-          library={library}
-          resolveLibraryImage={resolveLibraryImage}
-          onAttach={(dataUrl) => onAttach?.(dataUrl)}
+          items={library}
+          container={portalContainer}
+          onAttach={async (id) => {
+            const dataUrl = await resolveLibraryImage(id);
+            if (!dataUrl) throw new Error("Could not load this reference image.");
+            onAttach?.(dataUrl);
+          }}
           onClose={() => setPickerOpen(false)}
         />
       ) : null}
     </>
-  );
-}
-
-function LibraryPicker({
-  library,
-  resolveLibraryImage,
-  onAttach,
-  onClose,
-}: {
-  library: LibraryItem[];
-  resolveLibraryImage: (id: string) => Promise<string | null>;
-  onAttach: (dataUrl: string) => void;
-  onClose: () => void;
-}): ReactElement {
-  const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [attaching, setAttaching] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const groups = useMemo(() => filteredLibraryGroups(library, query), [library, query]);
-
-  const toggleDomain = (domain: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(domain)) next.delete(domain);
-      else next.add(domain);
-      return next;
-    });
-  };
-
-  const attach = async (item: LibraryItem) => {
-    if (attaching) return;
-    setAttaching(item.id);
-    setError(null);
-    const dataUrl = await resolveLibraryImage(item.id);
-    if (dataUrl) {
-      onAttach(dataUrl);
-      onClose();
-      return;
-    }
-    setAttaching(null);
-    setError("Could not load this reference image.");
-  };
-
-  return (
-    <div
-      className={C.pickerWrap}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className={C.picker} onMouseDown={(e) => e.stopPropagation()}>
-        <div className={C.pickerHeader}>
-          <div>
-            <div className={C.pickerTitle}>Reference library</div>
-            <div className={C.pickerDescription}>Choose a capture to attach.</div>
-          </div>
-          <button type="button" className={C.pickerClose} title="Close library" onClick={onClose}>
-            <X width={14} height={14} aria-hidden />
-          </button>
-        </div>
-        <div className="border-b border-loupe-line p-3">
-          <input
-            className={C.pickerSearch}
-            type="search"
-            placeholder="Search library"
-            value={query}
-            autoFocus
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // The picker is nested under the panel, so keep Enter/Escape from
-              // bubbling to the panel's submit / close handlers.
-              if (e.key === "Enter") {
-                e.preventDefault();
-                e.stopPropagation();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                onClose();
-              }
-            }}
-          />
-        </div>
-        {error ? (
-          <div className="rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-[12px] text-loupe-fg">{error}</div>
-        ) : null}
-        <div className={C.pickerList}>
-          {library.length === 0 ? (
-            <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
-              No saved references yet
-            </div>
-          ) : groups.length === 0 ? (
-            <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
-              No matches
-            </div>
-          ) : (
-            groups.map(([domain, items]) => {
-              const isCollapsed = collapsed.has(domain);
-              return (
-                <section key={domain}>
-                  <button type="button" className={C.pickerGroupButton} onClick={() => toggleDomain(domain)}>
-                    <ChevronRight
-                      width={13}
-                      height={13}
-                      style={{ transform: isCollapsed ? "" : "rotate(90deg)", transition: "transform 150ms ease" }}
-                      aria-hidden
-                    />
-                    <span>{domain}</span>
-                    <span className={C.pickerGroupCount}>{items.length}</span>
-                  </button>
-                  {!isCollapsed ? (
-                    <div className={C.pickerGrid}>
-                      {items.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className={C.pickCell}
-                          title={item.caption}
-                          disabled={attaching !== null}
-                          onClick={() => void attach(item)}
-                        >
-                          <div className={C.pickImgWrap}>
-                            <img className={C.refImg} src={item.thumbUrl} alt="" />
-                          </div>
-                          <div className={C.pickText}>{item.caption || item.url || item.id}</div>
-                          <div className={C.pickMeta}>
-                            {attaching === item.id
-                              ? "Attaching..."
-                              : item.createdAt
-                                ? captureDateLabel(item.createdAt)
-                                : item.url || item.id}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -695,26 +524,6 @@ function BrandFooter(): ReactElement {
       </button>
     </div>
   );
-}
-
-function SuggestionIcon({ kind }: { kind: SuggestionKind }): ReactElement {
-  const common = { width: 12, height: 12, "aria-hidden": true, style: { flexShrink: 0 } } as const;
-  switch (kind) {
-    case "padding":
-      return <Rows3 {...common} />;
-    case "spacing":
-      return <AlignHorizontalSpaceAround {...common} />;
-    case "typography":
-      return <CaseSensitive {...common} />;
-    case "alignment":
-      return <Move {...common} />;
-    case "contrast":
-      return <Contrast {...common} />;
-    case "radius":
-      return <SquareRoundCorner {...common} />;
-    case "size":
-      return <Maximize2 {...common} />;
-  }
 }
 
 function ActionIcon({ action }: { action: ActionDescriptor }): ReactElement | null {
@@ -752,50 +561,4 @@ function capitalizeFirst(label: string): string {
   const i = label.search(/[A-Za-z]/);
   if (i < 0) return label;
   return label.slice(0, i) + label[i]!.toUpperCase() + label.slice(i + 1);
-}
-
-// --- library grouping helpers (ported from the imperative picker) ---
-
-function filteredLibraryGroups(items: LibraryItem[], query: string): Array<[string, LibraryItem[]]> {
-  const q = normalizeSearch(query);
-  const map = new Map<string, LibraryItem[]>();
-  for (const item of items) {
-    const domain = libraryItemDomain(item);
-    const domainMatch = normalizeSearch(domain).includes(q);
-    const itemMatch = libraryItemMatches(item, q);
-    if (q && !domainMatch && !itemMatch) continue;
-    (map.get(domain) ?? map.set(domain, []).get(domain)!).push(item);
-  }
-  return [...map.entries()]
-    .map(([domain, groupItems]) => [domain, [...groupItems].sort((a, b) => newestTime(b) - newestTime(a))] as [string, LibraryItem[]])
-    .sort(([, a], [, b]) => newestTime(b[0]) - newestTime(a[0]));
-}
-
-function libraryItemMatches(item: LibraryItem, query: string): boolean {
-  if (!query) return true;
-  return [item.caption, item.url, item.id].some((value) => normalizeSearch(value).includes(query));
-}
-
-function libraryItemDomain(item: LibraryItem): string {
-  if (!item.url) return "Unknown";
-  try {
-    return new URL(item.url).hostname.replace(/^www\./, "") || "Unknown";
-  } catch {
-    return "Unknown";
-  }
-}
-
-function normalizeSearch(value: string | undefined): string {
-  return (value ?? "").toLowerCase().trim();
-}
-
-function newestTime(item: LibraryItem | undefined): number {
-  const time = Date.parse(item?.createdAt ?? "");
-  return Number.isNaN(time) ? 0 : time;
-}
-
-function captureDateLabel(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return `Captured ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
 }

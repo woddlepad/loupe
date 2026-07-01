@@ -6,6 +6,7 @@ import type {
   GroupsResult,
   ListResult,
   LoupeMessage,
+  RecordingFileResult,
   RecordingResult,
   RecordingsResult,
   ReferenceImageResult,
@@ -185,6 +186,15 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
       bridgeGet(`/references/${encodeURIComponent(msg.id)}/image`, senderUrl(sender))
         .then((b) => sendResponse({ ok: true, dataUrl: b.dataUrl } satisfies ReferenceImageResult))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies ReferenceImageResult));
+      return true;
+    case "recording-file":
+      bridgeGet(`/recording-file?path=${encodeURIComponent(`${msg.dir}/${msg.file}`)}`, senderUrl(sender))
+        .then((b) =>
+          b.ok
+            ? sendResponse({ ok: true, text: b.text, truncated: Boolean(b.truncated) } satisfies RecordingFileResult)
+            : sendResponse({ ok: false, error: String(b.error ?? "not found") } satisfies RecordingFileResult),
+        )
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies RecordingFileResult));
       return true;
     case "delete-reference":
       deleteReference(msg.id, senderUrl(sender))

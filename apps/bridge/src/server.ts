@@ -166,6 +166,9 @@ async function handleRequest(
   if (method === "GET" && path === "/file") {
     return serveFile(res, config.repoRoot, url.searchParams.get("path") ?? "");
   }
+  if (method === "GET" && path === "/recording-file") {
+    return json(res, 200, serveTextFile(config.repoRoot, url.searchParams.get("path") ?? ""));
+  }
   if (method === "POST" && path === "/annotate") {
     return withBody(req, res, (b) =>
       handleAnnotate(config, resolver, registry, JSON.parse(b) as AnnotatePayload),
@@ -225,7 +228,7 @@ async function handleRequest(
   const annotationUpdate = path.match(/^\/annotations\/([^/]+)\/update$/);
   if (method === "POST" && annotationUpdate) {
     return withBody(req, res, (b) =>
-      handleUpdateAnnotation(config, annotationUpdate[1]!, JSON.parse(b) as { note?: string; status?: unknown }),
+      handleUpdateAnnotation(config, annotationUpdate[1]!, JSON.parse(b) as { note?: string; status?: unknown; label?: string }),
     );
   }
 
@@ -515,12 +518,13 @@ function handleDeleteReferencesForPage(config: BridgeConfig, body: { url?: strin
 function handleUpdateAnnotation(
   config: BridgeConfig,
   id: string,
-  body: { note?: string; status?: unknown },
+  body: { note?: string; status?: unknown; label?: string },
 ): { ok: true } {
   const status = parseStatus(body.status);
   const ok = updateAnnotation(config.repoRoot, id, {
     ...(body.note !== undefined ? { note: body.note } : {}),
     ...(status ? { status } : {}),
+    ...(body.label !== undefined ? { label: body.label } : {}),
   });
   if (!ok) throw new Error(`annotation ${id} not found`);
   console.log(`[loupe] updated annotation ${id}${status ? ` → ${status}` : ""}`);
@@ -679,6 +683,20 @@ function serveFile(res: ServerResponse, repoRoot: string, rel: string): void {
   };
   res.writeHead(200, { "content-type": types[extname(abs).toLowerCase()] ?? "application/octet-stream" });
   res.end(readFileSync(abs));
+}
+
+/** Read a text telemetry file (network.jsonl, console.log, …) from `.loupe/`. */
+function serveTextFile(
+  repoRoot: string,
+  rel: string,
+): { ok: true; text: string; truncated: boolean } | { ok: false; error: string } {
+  const base = resolve(repoRoot, ".loupe");
+  const abs = resolve(repoRoot, rel);
+  if (!abs.startsWith(base + sep) || !existsSync(abs)) return { ok: false, error: "not found" };
+  const max = 4 * 1024 * 1024;
+  const raw = readFileSync(abs, "utf8");
+  const truncated = raw.length > max;
+  return { ok: true, text: truncated ? raw.slice(0, max) : raw, truncated };
 }
 
 // --- http helpers ---

@@ -42,7 +42,6 @@ function annotation(id: string, note = "initial note"): Annotation {
       className: "",
       componentChain: [{ name: "Button" }],
     },
-    acceptedSuggestions: [],
     note,
     createdAt: "2026-06-22T00:00:00.000Z",
     group: "notes",

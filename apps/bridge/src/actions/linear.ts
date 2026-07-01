@@ -35,9 +35,6 @@ async function createIssue(cfg: LinearConfig, ctx: ActionContext): Promise<Actio
     resolution.primary ? `**Source:** \`${resolution.primary}\`` : "",
     `**Page:** ${a.url}`,
     `**Annotation:** \`${bundle.dir}\``,
-    a.acceptedSuggestions.length
-      ? "\n" + a.acceptedSuggestions.map((s) => `- ${s.label}: ${s.detail}`).join("\n")
-      : "",
   ]
     .filter(Boolean)
     .join("\n");
