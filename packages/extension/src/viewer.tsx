@@ -23,11 +23,18 @@ interface PanelInteraction {
   startCollapsedPos: { left: number; top: number };
 }
 
+// Radix layers (dropdown / select / dialog) that portal into the panel iframe.
+// Used to detect an open layer so we can bridge outside-clicks into the frame.
+const OPEN_LAYER_SELECTOR =
+  '[data-slot="dropdown-menu-content"],[data-slot="dialog-content"],[data-slot="select-content"]';
+
 const MARGIN = 12;
 const MIN_WIDTH = 320;
 const MIN_HEIGHT = 240;
 const DEFAULT_WIDTH = 420;
-const COLLAPSED_WIDTH = 230;
+// Pre-measurement fallback width for the minimized toolbar; the React panel
+// reports its real (fitted) width via onCollapsedWidthChange right after mount.
+const COLLAPSED_WIDTH = 180;
 const COLLAPSED_HEIGHT = 48;
 
 const RESIZE_CURSORS: Record<string, string> = {
@@ -98,7 +105,7 @@ export class LoupeViewer {
     const panelFrame = document.createElement("iframe");
     root.append(style, mount, panelFrame);
     document.body.append(host);
-    const panelRoot = this.mountPanelFrame(panelFrame);
+    const panel = this.mountPanelFrame(panelFrame);
 
     this.host = host;
     this.root = root;
@@ -107,12 +114,20 @@ export class LoupeViewer {
     this.geometry = this.defaultGeometry();
     this.applyGeometry();
     void this.loadGeometry();
-    this.reactRoot = createRoot(mount);
+    // Mount React directly inside the panel iframe's document (falling back to
+    // the shadow-root `mount` only if the frame has no document). Keeping the
+    // React root, the Radix menu portals, and focus management all in one
+    // document is what makes the menus behave — a cross-document portal from the
+    // shadow root into the iframe broke Radix (double-click to open, no
+    // outside-click dismissal). The page-overlay layer (annotation pins,
+    // lightbox) portals back out to `mount` so it can position over the page.
+    this.reactRoot = createRoot(panel?.app ?? mount);
     this.reactRoot.render(
       <ViewerApp
         onClose={() => this.close()}
-        panelRoot={panelRoot}
-        panelEmbedded={panelRoot !== null}
+        panelRoot={panel?.portal ?? null}
+        panelEmbedded={panel !== null}
+        overlayContainer={panel ? mount : null}
         onCollapsedChange={this.setPanelCollapsed}
         onCollapsedWidthChange={this.setCollapsedWidth}
         onModeChange={(mode) => {
@@ -125,6 +140,7 @@ export class LoupeViewer {
 
     window.addEventListener("keydown", this.onKey, true);
     window.addEventListener("resize", this.onWindowResize, true);
+    window.addEventListener("pointerdown", this.onOutsidePointerDown, true);
     for (const t of ["keyup", "keypress", "paste", "copy", "cut"]) {
       window.addEventListener(t, this.onContain, true);
     }
@@ -135,6 +151,7 @@ export class LoupeViewer {
     this.endInteraction();
     window.removeEventListener("keydown", this.onKey, true);
     window.removeEventListener("resize", this.onWindowResize, true);
+    window.removeEventListener("pointerdown", this.onOutsidePointerDown, true);
     for (const t of ["keyup", "keypress", "paste", "copy", "cut"]) {
       window.removeEventListener(t, this.onContain, true);
     }
@@ -155,7 +172,7 @@ export class LoupeViewer {
     this.mode = "select";
   }
 
-  private mountPanelFrame(frame: HTMLIFrameElement): HTMLElement | null {
+  private mountPanelFrame(frame: HTMLIFrameElement): { app: HTMLElement; portal: HTMLElement } | null {
     frame.setAttribute("title", "Loupe annotations panel");
     frame.setAttribute("aria-label", "Loupe annotations panel");
     frame.setAttribute("allowtransparency", "true");
@@ -184,7 +201,19 @@ export class LoupeViewer {
     doc.body.style.setProperty("background", "transparent", "important");
     doc.defaultView?.addEventListener("keydown", this.onFrameKey, true);
     doc.addEventListener("pointerdown", this.onFramePointerDown, true);
-    return doc.body;
+    doc.addEventListener("pointerdown", this.onOutsidePointerDown, true);
+
+    // Two separate children of <body>: `app` hosts the React root, `portal` is
+    // the Radix menu portal target. They must be DISTINCT nodes — portalling a
+    // Radix layer into the React root container itself makes React fire the
+    // layer's capture handler for every event it processes at the root, so
+    // DismissableLayer treats all outside pointerdowns as "inside" and never
+    // dismisses. A dedicated sibling portal node avoids that entirely.
+    const app = doc.createElement("div");
+    app.style.cssText = "height:100%";
+    const portal = doc.createElement("div");
+    doc.body.append(app, portal);
+    return { app, portal };
   }
 
   private defaultGeometry(): PanelGeometry {
@@ -291,12 +320,35 @@ export class LoupeViewer {
     if (this.host && e.composedPath().includes(this.host)) e.stopImmediatePropagation();
   };
 
+  // Dismiss any open Radix layer (dropdown / select / dialog) when the user
+  // presses outside it. Radix's own pointerdown-outside detection does not fire
+  // for menus portalled into the panel iframe (its listener, registered via a
+  // deferred `setTimeout`, never takes effect across the iframe/React-root
+  // boundary), but its synchronous Escape handling does. So we detect the
+  // outside press ourselves and route it through Escape — the dismissal path
+  // that reliably works. Registered on both the iframe document (in-panel
+  // presses) and the top window (presses on the host page / shadow chrome).
+  private onOutsidePointerDown = (e: Event): void => {
+    if (!this.active) return;
+    const doc = this.panelFrame?.contentDocument;
+    if (!doc) return;
+    const openLayers = Array.from(doc.querySelectorAll(OPEN_LAYER_SELECTOR)).filter(
+      (el) => el.getAttribute("data-state") === "open",
+    );
+    if (!openLayers.length) return;
+    const path = e.composedPath();
+    // A press inside an open layer, or on any menu trigger, is handled by Radix.
+    if (openLayers.some((el) => path.includes(el))) return;
+    if (path.some((n) => n instanceof Element && n.closest("[data-slot$='-trigger']"))) return;
+    doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  };
+
   private onFrameKey = (e: KeyboardEvent): void => {
     if (!this.active || e.key !== "Escape") return;
     // Let an open Radix layer (dropdown menu / dialog / select) handle its own
     // Escape-to-dismiss instead of tearing down the whole panel.
     const doc = this.panelFrame?.contentDocument;
-    if (doc?.querySelector('[data-slot="dropdown-menu-content"],[data-slot="dialog-content"],[data-slot="select-content"]')) {
+    if (doc?.querySelector(OPEN_LAYER_SELECTOR)) {
       return;
     }
     e.preventDefault();

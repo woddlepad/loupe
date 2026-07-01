@@ -34,6 +34,7 @@ import type {
 } from "./messages.js";
 import { isProjectUrl } from "./origins.js";
 import { bridgeUrlForUrl, enabledActions, loadSettings } from "./settings.js";
+import { loupeToast } from "./toaster.js";
 import { LoupeViewer } from "./viewer.js";
 import type { LoupeMode } from "./viewer-app.js";
 
@@ -665,7 +666,7 @@ function isFreshDraft(value: unknown): value is LoupeOverlayDraft {
   const draft = value as Partial<LoupeOverlayDraft>;
   if (draftStorageKey(draft.url ?? "") !== draftStorageKey(location.href)) return false;
   if (draft.mode !== "annotate" && draft.mode !== "reference") return false;
-  if (!draft.rect || !Array.isArray(draft.references) || !Array.isArray(draft.acceptedKinds)) return false;
+  if (!draft.rect || !Array.isArray(draft.references)) return false;
   const updatedAt = Date.parse(draft.updatedAt ?? "");
   return Number.isFinite(updatedAt) && Date.now() - updatedAt < DRAFT_MAX_AGE_MS;
 }
@@ -870,21 +871,6 @@ function agentPromptText(annotation: Annotation, resolution: ResolveContext | nu
   return lines.join("\n");
 }
 
-function toast(text: string): void {
-  const host = document.createElement("div");
-  host.setAttribute("data-loupe-overlay", "");
-  const root = host.attachShadow({ mode: "open" });
-  const style = document.createElement("style");
-  style.textContent = `
-    .t { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-         background: #101010; color: #f8f8f8; padding: 9px 14px; border-radius: 12px;
-         font: 13px ui-sans-serif, system-ui, sans-serif; z-index: 2147483647; white-space: pre-line;
-         box-shadow: 0 12px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
-         box-sizing: border-box; max-width: min(440px, calc(100vw - 32px)); overflow-wrap: anywhere; }`;
-  const toastEl = document.createElement("div");
-  toastEl.className = "t";
-  toastEl.textContent = text;
-  root.append(style, toastEl);
-  document.body.append(host);
-  setTimeout(() => host.remove(), 4200);
+function toast(text: string, variant: "success" | "error" | "info" = "success"): void {
+  loupeToast(text, variant);
 }

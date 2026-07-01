@@ -63,7 +63,16 @@ loupe init --origin staging.acme.com --port 5174
 4. If `resolution.primary` is empty, infer the source from the URL route, selector/data attributes, visible text, component names, and repo search. Search for stable anchors such as `data-testid`, page route segments, button labels, surrounding text, and class names.
 5. Implement the UI change. Keep scope tight to the annotation.
 6. Run the smallest relevant checks available in the repo.
-7. Mark each implemented annotation as needing human review:
+7. Give the annotation a concise, human-readable title so the human can recognize
+   it later while browsing the backlog. It defaults to the component name at
+   capture time, which is not descriptive — replace it with 5–8 words describing
+   the change (e.g. "Idle voice waveform on call preview"), not the component name:
+
+```bash
+loupe title <annotation_id> "Idle voice waveform on call preview"
+```
+
+8. Mark each implemented annotation as needing human review:
 
 ```bash
 loupe status <annotation_id> --status needs_review --author agent:<agent-name>

@@ -256,9 +256,15 @@ function formatDuration(ms: number): string {
 }
 
 function decodeVideo(dataUrl: string): Buffer | null {
-  const m = dataUrl.match(/^data:video\/[a-z0-9.+-]+;base64,(.+)$/i);
-  if (!m) return null;
-  return Buffer.from(m[1]!, "base64");
+  // The offscreen recorder emits `data:video/webm;codecs=vp9;base64,…`, so the
+  // media type carries codec parameters between the subtype and `;base64`. Match
+  // on the `;base64,` boundary rather than a fixed subtype so the payload isn't
+  // silently dropped (which surfaced as "no video captured").
+  if (!/^data:video\//i.test(dataUrl)) return null;
+  const marker = ";base64,";
+  const idx = dataUrl.indexOf(marker);
+  if (idx === -1) return null;
+  return Buffer.from(dataUrl.slice(idx + marker.length), "base64");
 }
 
 export interface WrittenReference {
@@ -310,7 +316,6 @@ function renderNote(
 ): string {
   const chain = a.target.componentChain.map((c) => c.name).join(" › ") || "(no React component found)";
   const slot = a.target.dataAttributes["data-slot"];
-  const suggestions = a.acceptedSuggestions.map((s) => `- **${s.label}** — ${s.detail}`).join("\n");
   const candidates = r.candidates.length
     ? r.candidates.map((c) => `- \`${c}\``).join("\n")
     : "- _(unresolved — use the component name + selector + screenshot)_";
@@ -337,7 +342,6 @@ function renderNote(
     "## Note",
     a.note || "_(no free-form note)_",
     refImgs ? "\n## Reference images\n" + refImgs : "",
-    suggestions ? "\n## Suggested fixes\n" + suggestions : "",
     "",
   ]
     .filter((line) => line !== undefined)

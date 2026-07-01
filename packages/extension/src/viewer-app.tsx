@@ -1,6 +1,8 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import type { ActionDescriptor, AnnotationStatus } from "@loupe/core/model";
+import type { ActionDescriptor, AnnotationStatus, NetworkEntry, PageErrorEntry } from "@loupe/core/model";
+import { LibraryPicker } from "@loupe/core";
+import type { LibraryItem } from "@loupe/core";
 import {
   ArrowLeft,
   ArrowUp,
@@ -12,8 +14,11 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  File,
+  Files,
   GripVertical,
   ImagePlus,
+  Inbox,
   Library,
   Minus,
   MoreHorizontal,
@@ -22,13 +27,16 @@ import {
   Plus,
   Search,
   Trash2,
+  Video,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type {
   GroupsResult,
   GroupSummary,
   ListResult,
   LoupeMessage,
+  RecordingFileResult,
   RecordingsResult,
   ReferenceImageResult,
   ReferenceItem,
@@ -88,6 +96,9 @@ export interface ViewerApi {
 export interface ViewerAppProps {
   onClose: () => void;
   panelRoot?: HTMLElement | null;
+  /** Shadow-root container the page-overlay layer (pins, lightbox) portals into
+   * when React is rooted inside the panel iframe. `null` renders it inline. */
+  overlayContainer?: HTMLElement | null;
   panelEmbedded?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
   /** Reports the measured width of the minimized toolbar so the host iframe can
@@ -132,7 +143,7 @@ function ModeToolbar({
   );
 }
 
-export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, onCollapsedChange, onCollapsedWidthChange, onModeChange, onReady }: ViewerAppProps) {
+export function ViewerApp({ onClose, panelRoot = null, overlayContainer = null, panelEmbedded = false, onCollapsedChange, onCollapsedWidthChange, onModeChange, onReady }: ViewerAppProps) {
   const [mode, setMode] = React.useState<LoupeMode>("select");
   const [annotations, setAnnotations] = React.useState<StoredAnnotation[]>([]);
   const [recordings, setRecordings] = React.useState<StoredAnnotation[]>([]);
@@ -158,6 +169,7 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
   // clear the preview order out from under the in-flight reorder.
   const committingGroupOrderRef = React.useRef(false);
   const [lightbox, setLightbox] = React.useState<string | null>(null);
+  const [addingGroup, setAddingGroup] = React.useState(false);
   const [, forceLayout] = React.useReducer((n: number) => n + 1, 0);
   const collapsedRef = React.useRef<HTMLDivElement>(null);
 
@@ -243,6 +255,16 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (eventPathHasAttribute(e, "data-loupe-library-popover")) return;
+      // An open Radix layer (dropdown / select / dialog) owns Escape — let it
+      // dismiss itself instead of tearing down the whole viewer. Its own
+      // `onOpenChange` keeps our state (e.g. `viewMenuOpen`) in sync.
+      if (
+        panelRoot?.ownerDocument.querySelector(
+          '[data-slot="dropdown-menu-content"][data-state="open"],[data-slot="select-content"][data-state="open"],[data-slot="dialog-content"][data-state="open"]',
+        )
+      ) {
+        return;
+      }
       e.preventDefault();
       e.stopImmediatePropagation();
       if (viewMenuOpen) setViewMenuOpen(false);
@@ -254,7 +276,7 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [lightbox, onClose, viewMenuOpen, mode, changeMode]);
+  }, [lightbox, onClose, viewMenuOpen, mode, changeMode, panelRoot]);
 
   React.useEffect(() => {
     const targetWindows = uniqueWindows([window, panelRoot?.ownerDocument.defaultView ?? null]);
@@ -315,16 +337,17 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
   const scopedResolvedCount = scoped.filter((a) => a.status === "resolved").length;
   const viewOptions = React.useMemo<ViewerFilterOption[]>(
     () => [
-      { value: "review", label: "Needs review", count: reviewCount, shortcut: "N" },
-      { value: "page", label: "This page", count: pageCount, shortcut: "P" },
-      { value: "all", label: "All pages", count: allCount, shortcut: "A" },
-      { value: "recordings", label: "Recordings", count: recordingCount, shortcut: "R" },
-      { value: "library", label: "Library", count: libraryCount, shortcut: "L" },
+      { value: "review", label: "Needs review", count: reviewCount, shortcut: "N", icon: Inbox },
+      { value: "page", label: "This page", count: pageCount, shortcut: "P", icon: File },
+      { value: "all", label: "All pages", count: allCount, shortcut: "A", icon: Files },
+      { value: "recordings", label: "Recordings", count: recordingCount, shortcut: "R", icon: Video },
+      { value: "library", label: "Library", count: libraryCount, shortcut: "L", icon: Library },
     ],
     [allCount, libraryCount, pageCount, recordingCount, reviewCount],
   );
   const selectedView = viewOptions.find((option) => option.value === filter) ?? viewOptions[0]!;
   const active = expanded ? annotations.find((a) => a.id === expanded) : undefined;
+  const activeRecording = expanded ? recordings.find((r) => r.id === expanded) : undefined;
   const searching = normalizeSearch(query).length > 0;
   const baseGroupRows = React.useMemo(
     () =>
@@ -353,6 +376,7 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     author,
     bridgeUrl,
     repoRoot,
+    overlayContainer,
     expanded,
     collapsedGroups,
     dragOverGroup,
@@ -446,7 +470,7 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
           ref={collapsedRef}
           data-loupe-panel-drag=""
           className={cn(
-            "flex h-12 w-fit items-center gap-1.5 rounded-xl border border-loupe-line bg-loupe-panel/95 px-1.5 text-loupe-fg shadow-2xl shadow-black/50",
+            "flex h-12 w-fit items-center gap-1.5 rounded-xl border border-loupe-line bg-loupe-panel px-1.5 text-loupe-fg shadow-2xl shadow-black/50",
             panelEmbedded ? "cursor-grab active:cursor-grabbing" : "fixed right-3 top-3 z-[2147483646]",
           )}
         >
@@ -467,7 +491,7 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
       ) : (
         <section
           className={cn(
-            "relative flex flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel/95 text-[13px] text-loupe-fg shadow-2xl shadow-black/50",
+            "relative flex flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel text-[13px] text-loupe-fg shadow-2xl shadow-black/50",
             panelEmbedded ? "h-full w-full" : "fixed bottom-3 right-3 top-3 z-[2147483646] w-[420px]",
           )}
         >
@@ -490,9 +514,6 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
               />
             </div>
             <div className="ml-auto" />
-            <div data-loupe-panel-no-drag="">
-              <ModeToolbar mode={mode} onModeChange={changeMode} compact />
-            </div>
             <Button data-loupe-panel-no-drag="" variant="ghost" size="icon-sm" title="Collapse annotations" onClick={() => setViewerCollapsed(true)}>
               <Minus className="h-4 w-4" />
             </Button>
@@ -503,15 +524,15 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
 
           {filter === "library" ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
-              <span className="text-[11px] text-loupe-muted">References are sorted by capture date.</span>
+              <span className="text-[11px] text-loupe-muted">Reference captures, grouped by page.</span>
               <span className="ml-auto text-[11px] text-loupe-faint">{references.length}</span>
             </div>
-          ) : filter === "recordings" ? (
+          ) : filter === "recordings" && !activeRecording ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
               <span className="text-[11px] text-loupe-muted">Flow recordings with console + network logs.</span>
               <span className="ml-auto text-[11px] text-loupe-faint">{recordingCount}</span>
             </div>
-          ) : !active ? (
+          ) : !active && filter !== "recordings" ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-loupe-faint" />
@@ -538,15 +559,29 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
                 }}
                 groupVisibilityActive={groupVisibilityActive}
                 onShowAllGroups={ctx.clearGroupVisibility}
+                onAddGroup={() => setAddingGroup(true)}
               />
             </div>
           ) : null}
 
           <div ref={listRef} className="flex-1 overflow-y-auto py-2">
+            {addingGroup && !active && filter !== "recordings" && filter !== "library" ? (
+              <AddGroupForm
+                onDone={async () => {
+                  setAddingGroup(false);
+                  await reload();
+                }}
+                onCancel={() => setAddingGroup(false)}
+              />
+            ) : null}
             {active && filter !== "recordings" && filter !== "library" ? (
               <AnnotationDetailScreen annotation={active} ctx={ctx} />
             ) : filter === "recordings" ? (
-              <RecordingsTab recordings={recordings} ctx={ctx} />
+              activeRecording ? (
+                <RecordingDetailScreen recording={activeRecording} ctx={ctx} />
+              ) : (
+                <RecordingsTab recordings={recordings} ctx={ctx} />
+              )
             ) : filter === "library" ? (
               <LibraryTab refs={references} ctx={ctx} />
             ) : groupRows.length === 0 ? (
@@ -560,7 +595,6 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
                 <AnnotationGroup key={row.slug} group={row.group} slug={row.slug} items={row.items} ctx={ctx} />
               ))
             )}
-            {!active && filter !== "recordings" && filter !== "library" ? <AddGroupForm onDone={reload} /> : null}
           </div>
 
           <BrandFooter />
@@ -569,14 +603,22 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     </>
   );
 
-  return (
+  // React is rooted inside the panel iframe, so the panel renders inline and its
+  // Radix menus portal within the same document (via PortalContainerProvider).
+  // The page-overlay layer (pins + lightbox) has to live in the top document to
+  // position over the page, so it portals out to `overlayContainer` (the shadow
+  // mount). Falls back to inline rendering when there is no separate container.
+  const overlay = (
     <>
-      {panelRoot
-        ? createPortal(<PortalContainerProvider value={panelRoot}>{panel}</PortalContainerProvider>, panelRoot)
-        : panel}
-
       <Pins annotations={annotations} showResolved={showResolved} expanded={expanded} setExpanded={setExpanded} setFilter={setFilter} setCollapsed={setViewerCollapsed} />
       {lightbox ? <Lightbox src={lightbox} onClose={() => setLightbox(null)} /> : null}
+    </>
+  );
+
+  return (
+    <>
+      <PortalContainerProvider value={panelRoot}>{panel}</PortalContainerProvider>
+      {overlayContainer ? createPortal(overlay, overlayContainer) : overlay}
     </>
   );
 }
@@ -588,6 +630,8 @@ interface ViewerContext {
   author: string;
   bridgeUrl: string;
   repoRoot?: string;
+  /** Shadow-root mount that carries the Loupe styles + `.dark`; full-page overlays (lightbox, library picker) portal here to position over the page while staying styled. Null when the viewer renders inline. */
+  overlayContainer?: HTMLElement | null;
   expanded: string | null;
   collapsedGroups: Set<string>;
   dragOverGroup: string | null;
@@ -619,6 +663,7 @@ interface ViewerFilterOption {
   label: string;
   count: number;
   shortcut: string;
+  icon: LucideIcon;
 }
 
 function ViewFilterSelect({
@@ -655,10 +700,11 @@ function ViewFilterSelect({
             className={cn(option.value === value && "bg-foreground/5 text-foreground")}
             onSelect={() => onValueChange(option.value)}
           >
+            <option.icon className="h-4 w-4 shrink-0 text-loupe-muted" />
+            <span className="min-w-0 flex-1 truncate">{option.label}</span>
             <span className="grid h-5 min-w-6 place-items-center rounded-md border border-loupe-line bg-white/10 px-1.5 text-[10px] font-semibold leading-none text-loupe-muted">
               {option.count}
             </span>
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
             <span className="ml-auto w-4 text-right text-[10px] text-loupe-faint">{option.shortcut}</span>
           </DropdownMenuItem>
         ))}
@@ -698,10 +744,11 @@ function ResizeHandles() {
 function ViewFilterLabel({ option }: { option: ViewerFilterOption }) {
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
-      <span className="grid h-4 min-w-4 place-items-center rounded-full bg-loupe-fg px-1 text-[10px] font-semibold leading-none text-loupe-bg">
+      <option.icon className="h-4 w-4 shrink-0 opacity-80" />
+      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+      <span className="grid h-5 min-w-6 place-items-center rounded-md border border-loupe-line bg-white/10 px-1.5 text-[10px] font-semibold leading-none text-loupe-muted">
         {option.count}
       </span>
-      <span className="min-w-0 flex-1 truncate">{option.label}</span>
     </span>
   );
 }
@@ -789,12 +836,12 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
         </button>
         <button
           type="button"
-          className="flex min-w-0 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/5"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/5"
           onClick={() => ctx.toggleGroup(slug)}
         >
           <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} />
           <span className="truncate text-[12px] font-medium text-loupe-muted">{group}</span>
-          <span className="shrink-0">{open}/{items.length}</span>
+          <span className="ml-auto shrink-0">{open}/{items.length}</span>
         </button>
         <GroupActionsMenu
           className="ml-auto"
@@ -828,7 +875,7 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
         }}
       />
       {!collapsed ? (
-        <div className="space-y-1 px-2">
+        <div className="space-y-2 px-2">
           {items.map((a) => <AnnotationRow key={a.id} annotation={a} ctx={ctx} />)}
           {items.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-loupe-faint">No annotations here yet</div>
@@ -839,14 +886,9 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
   );
 }
 
-function AddGroupForm({ onDone }: { onDone: () => Promise<void> }) {
-  const [open, setOpen] = React.useState(false);
+function AddGroupForm({ onDone, onCancel }: { onDone: () => Promise<void>; onCancel: () => void }) {
   const [value, setValue] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-
-  React.useEffect(() => {
-    if (open) setValue("");
-  }, [open]);
 
   async function addGroup() {
     const group = value.trim();
@@ -856,35 +898,27 @@ function AddGroupForm({ onDone }: { onDone: () => Promise<void> }) {
     setSaving(false);
     if (r.ok) {
       setValue("");
-      setOpen(false);
       await onDone();
     }
   }
 
   return (
-    <div className="mx-2 mt-3 border-t border-loupe-line/70 pt-2">
-      {!open ? (
-        <Button type="button" variant="outline" size="xs" className="w-full" onClick={() => setOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          Add group
-        </Button>
-      ) : (
-        <form
-          className="rounded-xl border border-loupe-line bg-loupe-bg/50 p-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void addGroup();
-          }}
-        >
-          <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
-          <div className="mt-2 flex items-center justify-end gap-1.5">
-            <Button type="button" variant="outline" size="xs" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit" variant="default" size="xs" loading={saving} disabled={!value.trim()}>
-              OK
-            </Button>
-          </div>
-        </form>
-      )}
+    <div className="mx-2 mb-2">
+      <form
+        className="rounded-xl border border-loupe-line bg-loupe-bg/50 p-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void addGroup();
+        }}
+      >
+        <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" onKeyDown={(e) => e.key === "Escape" && onCancel()} />
+        <div className="mt-2 flex items-center justify-end gap-1.5">
+          <Button type="button" variant="outline" size="xs" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" variant="default" size="xs" loading={saving} disabled={!value.trim()}>
+            OK
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -1112,6 +1146,7 @@ function ListActionsMenu({
   onDeleteResolved,
   groupVisibilityActive,
   onShowAllGroups,
+  onAddGroup,
 }: {
   visibleCount: number;
   scopedCount: number;
@@ -1121,6 +1156,7 @@ function ListActionsMenu({
   onDeleteResolved: () => void | Promise<void>;
   groupVisibilityActive: boolean;
   onShowAllGroups: () => void;
+  onAddGroup: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
 
@@ -1133,6 +1169,10 @@ function ListActionsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
         <div className="px-2 py-1.5 text-[11px] text-loupe-faint">{visibleCount} of {scopedCount} shown</div>
+        <DropdownMenuSeparator />
+        <MenuItem onSelect={onAddGroup} icon={<Plus className="h-3.5 w-3.5" />}>
+          Add group
+        </MenuItem>
         <DropdownMenuSeparator />
         <MenuItem onSelect={onToggleResolved} icon={showResolved ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}>
           {showResolved ? "Hide resolved" : "Show resolved"}
@@ -1219,77 +1259,115 @@ function isPi(action: ActionDescriptor | undefined): boolean {
   return action?.id === "pi" || action?.label?.toLowerCase() === "pi";
 }
 
-function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
-  const isExpanded = ctx.expanded === annotation.id;
-  const thumb = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
-  const otherPage = pageKey(annotation.url) !== pageKey(location.href);
-  const [menuAnchor, setMenuAnchor] = React.useState<{ x: number; y: number } | null>(null);
+/** Failure-aware preview image for a card: a large 16:9 thumbnail that opens the
+ * lightbox on click. Shared by annotations and library references so both read
+ * as the same kind of thing. */
+function CardMedia({ src, title, onOpen }: { src: string; title?: string; onOpen: () => void }) {
+  const [failed, setFailed] = React.useState(false);
+  if (failed) {
+    return (
+      <div className="grid aspect-video w-full place-items-center border-b border-loupe-line bg-loupe-bg/60 px-4 text-center text-[11px] text-loupe-faint">
+        Image could not be loaded
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="relative block aspect-video w-full overflow-hidden border-b border-loupe-line bg-black/40 transition-opacity hover:opacity-95"
+      onClick={onOpen}
+      title={title ?? "Open image"}
+    >
+      {/* Blurred cover fills the frame; the contained copy on top keeps the whole
+          capture visible regardless of its aspect ratio. */}
+      <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
+      <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" onError={() => setFailed(true)} />
+    </button>
+  );
+}
 
+/** The unified card used across the annotation list and the library. Large
+ * preview image on top, a title/note body, and an Open + More footer. Every list
+ * (annotations, references) renders through this so the views match. */
+function ItemCard({
+  imageSrc,
+  imageTitle,
+  onImageOpen,
+  title,
+  note,
+  badges,
+  onBodyClick,
+  bodyTitle,
+  openLabel = "Open",
+  openTitle,
+  onOpen,
+  more,
+  active = false,
+  draggable = false,
+  onDragStart,
+  onDragEnd,
+  onContextMenu,
+}: {
+  imageSrc: string;
+  imageTitle?: string;
+  onImageOpen: () => void;
+  title: string;
+  note?: string;
+  badges?: React.ReactNode;
+  onBodyClick?: () => void;
+  bodyTitle?: string;
+  openLabel?: string;
+  openTitle?: string;
+  onOpen?: () => void;
+  more?: React.ReactNode;
+  active?: boolean;
+  draggable?: boolean;
+  onDragStart?: React.DragEventHandler<HTMLElement>;
+  onDragEnd?: React.DragEventHandler<HTMLElement>;
+  onContextMenu?: React.MouseEventHandler<HTMLElement>;
+}) {
+  const body = (
+    <>
+      <div className="truncate text-[12.5px] font-medium text-loupe-fg">{title}</div>
+      {note ? <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-loupe-muted">{note}</div> : null}
+    </>
+  );
   return (
     <article
-      draggable
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onContextMenu={onContextMenu}
       className={cn(
-        "rounded-xl border border-transparent bg-transparent transition-colors hover:bg-white/[0.04]",
-        isExpanded && "border-loupe-line bg-white/[0.04]",
+        "overflow-hidden rounded-xl border bg-transparent transition-colors",
+        active ? "border-loupe-line bg-white/[0.04]" : "border-loupe-line/60 hover:bg-white/[0.04]",
       )}
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("application/x-loupe-annotation-id", annotation.id);
-      }}
-      onDragEnd={() => ctx.setDragOverGroup(null)}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenuAnchor({ x: e.clientX, y: e.clientY });
-      }}
     >
-      {menuAnchor ? (
-        <AnnotationRowMenu annotation={annotation} ctx={ctx} anchor={menuAnchor} onClose={() => setMenuAnchor(null)} />
-      ) : null}
-      <button
-        type="button"
-        className="flex w-full items-start gap-2 p-2 text-left"
-        onClick={() => ctx.setExpanded(annotation.id)}
-      >
-        <img src={thumb} alt="" className="h-11 w-14 shrink-0 rounded-lg border border-loupe-line bg-loupe-bg object-cover" onError={(e) => e.currentTarget.remove()} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] font-medium text-loupe-fg">{componentCrumb(annotation)}</div>
-          {annotation.note ? <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-loupe-muted">{annotation.note}</div> : null}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <StatusBadge status={annotation.status} />
-            {otherPage ? <Badge variant="outline">{hostLabel(annotation.url)}</Badge> : null}
-          </div>
+      <CardMedia src={imageSrc} title={imageTitle} onOpen={onImageOpen} />
+      <div className="space-y-2 p-2.5">
+        {onBodyClick ? (
+          <button type="button" className="block w-full min-w-0 rounded-md text-left" onClick={onBodyClick} title={bodyTitle}>
+            {body}
+          </button>
+        ) : (
+          <div className="min-w-0">{body}</div>
+        )}
+        {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}
+        <div className="flex items-center gap-1.5">
+          {onOpen ? (
+            <Button variant="outline" size="xs" title={openTitle} onClick={onOpen}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              {openLabel}
+            </Button>
+          ) : null}
+          {more ? <div className="ml-auto">{more}</div> : null}
         </div>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          title={otherPage ? "Open annotation page" : "Jump to annotation"}
-          onClick={(e) => {
-            e.stopPropagation();
-            jumpToAnnotation(annotation, ctx);
-          }}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </Button>
-      </button>
+      </div>
     </article>
   );
 }
 
-/** Right-click menu for an annotation row: same send / resolve / delete actions
- * as the detail view, reachable straight from the overview. Anchored to the
- * cursor via a zero-size virtual trigger so Radix handles positioning. */
-function AnnotationRowMenu({
-  annotation,
-  ctx,
-  anchor,
-  onClose,
-}: {
-  annotation: StoredAnnotation;
-  ctx: ViewerContext;
-  anchor: { x: number; y: number };
-  onClose: () => void;
-}) {
-  const sendable = ctx.actions.filter((a) => a.id !== "save");
+function useAnnotationActions(annotation: StoredAnnotation, ctx: ViewerContext) {
   const [busy, setBusy] = React.useState(false);
 
   async function send(actionId: string) {
@@ -1312,30 +1390,150 @@ function AnnotationRowMenu({
     }
   }
 
+  return { busy, send, setStatus, remove };
+}
+
+/** The full set of per-annotation menu entries, shared by the card's More button
+ * and the right-click context menu. */
+function AnnotationMenuItems({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
+  const sendable = ctx.actions.filter((a) => a.id !== "save");
+  const { busy, send, setStatus, remove } = useAnnotationActions(annotation, ctx);
+  const otherPage = pageKey(annotation.url) !== pageKey(location.href);
+
+  return (
+    <>
+      <MenuItem onSelect={() => jumpToAnnotation(annotation, ctx)} icon={<ExternalLink className="h-3.5 w-3.5" />}>
+        {otherPage ? "Open annotation page" : "Jump to annotation"}
+      </MenuItem>
+      <MenuItem onSelect={() => ctx.setExpanded(annotation.id)} icon={<Pencil className="h-3.5 w-3.5" />}>
+        Edit details
+      </MenuItem>
+      <MenuItem
+        onSelect={() => void setStatus(annotation.status === "resolved" ? "open" : "resolved")}
+        icon={<CircleCheck className="h-3.5 w-3.5" />}
+      >
+        {annotation.status === "resolved" ? "Reopen" : "Resolve"}
+      </MenuItem>
+      <MenuItem onSelect={() => void remove()} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
+        Delete
+      </MenuItem>
+      {sendable.length > 0 ? <DropdownMenuSeparator /> : null}
+      {sendable.map((a) => (
+        <MenuItem key={a.id} disabled={busy} onSelect={() => void send(a.id)} icon={<ProviderIcon action={a} colored />}>
+          Send to {displayActionLabel(a)}
+        </MenuItem>
+      ))}
+    </>
+  );
+}
+
+/** The card's "More" button — a dropdown fronting the shared annotation actions. */
+function AnnotationMoreButton({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="ghost" size="icon-sm" title="More actions" onClick={(e) => e.stopPropagation()}>
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <AnnotationMenuItems annotation={annotation} ctx={ctx} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The card's "More" button for a library reference. */
+function ReferenceMoreButton({ refItem, deleting, onDelete }: { refItem: ReferenceItem; deleting: boolean; onDelete: () => void }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="ghost" size="icon-sm" title="More actions" onClick={(e) => e.stopPropagation()}>
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        {refItem.url ? (
+          <MenuItem onSelect={() => window.open(refItem.url, "_blank", "noopener,noreferrer")} icon={<ExternalLink className="h-3.5 w-3.5" />}>
+            Open source page
+          </MenuItem>
+        ) : null}
+        <MenuItem disabled={deleting} onSelect={onDelete} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
+          Delete
+        </MenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
+  const isExpanded = ctx.expanded === annotation.id;
+  const thumb = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
+  const otherPage = pageKey(annotation.url) !== pageKey(location.href);
+  const [menuAnchor, setMenuAnchor] = React.useState<{ x: number; y: number } | null>(null);
+
+  return (
+    <>
+      {menuAnchor ? (
+        <AnnotationRowMenu annotation={annotation} ctx={ctx} anchor={menuAnchor} onClose={() => setMenuAnchor(null)} />
+      ) : null}
+      <ItemCard
+        active={isExpanded}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("application/x-loupe-annotation-id", annotation.id);
+        }}
+        onDragEnd={() => ctx.setDragOverGroup(null)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuAnchor({ x: e.clientX, y: e.clientY });
+        }}
+        imageSrc={thumb}
+        imageTitle="Open annotation image"
+        onImageOpen={() => ctx.setLightbox(thumb)}
+        title={annotationHeadline(annotation)}
+        note={annotation.note || undefined}
+        bodyTitle="Edit details"
+        onBodyClick={() => ctx.setExpanded(annotation.id)}
+        badges={
+          <>
+            <StatusBadge status={annotation.status} />
+            {otherPage ? <Badge variant="outline">{hostLabel(annotation.url)}</Badge> : null}
+          </>
+        }
+        openLabel={otherPage ? "Open page" : "Jump"}
+        openTitle={otherPage ? "Open annotation page" : "Jump to annotation"}
+        onOpen={() => jumpToAnnotation(annotation, ctx)}
+        more={<AnnotationMoreButton annotation={annotation} ctx={ctx} />}
+      />
+    </>
+  );
+}
+
+/** Right-click menu for an annotation row: same send / resolve / delete actions
+ * as the detail view, reachable straight from the overview. Anchored to the
+ * cursor via a zero-size virtual trigger so Radix handles positioning. */
+function AnnotationRowMenu({
+  annotation,
+  ctx,
+  anchor,
+  onClose,
+}: {
+  annotation: StoredAnnotation;
+  ctx: ViewerContext;
+  anchor: { x: number; y: number };
+  onClose: () => void;
+}) {
   return (
     <DropdownMenu open onOpenChange={(next) => { if (!next) onClose(); }}>
       <DropdownMenuTrigger asChild>
         <span aria-hidden className="pointer-events-none fixed" style={{ left: anchor.x, top: anchor.y, width: 0, height: 0 }} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" sideOffset={2} className="w-52">
-        <MenuItem onSelect={() => jumpToAnnotation(annotation, ctx)} icon={<ExternalLink className="h-3.5 w-3.5" />}>
-          {pageKey(annotation.url) !== pageKey(location.href) ? "Open annotation page" : "Jump to annotation"}
-        </MenuItem>
-        <MenuItem
-          onSelect={() => void setStatus(annotation.status === "resolved" ? "open" : "resolved")}
-          icon={<CircleCheck className="h-3.5 w-3.5" />}
-        >
-          {annotation.status === "resolved" ? "Reopen" : "Resolve"}
-        </MenuItem>
-        <MenuItem onSelect={() => void remove()} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
-          Delete
-        </MenuItem>
-        {sendable.length > 0 ? <DropdownMenuSeparator /> : null}
-        {sendable.map((a) => (
-          <MenuItem key={a.id} disabled={busy} onSelect={() => void send(a.id)} icon={<ProviderIcon action={a} colored />}>
-            Send to {displayActionLabel(a)}
-          </MenuItem>
-        ))}
+        <AnnotationMenuItems annotation={annotation} ctx={ctx} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1367,7 +1565,7 @@ function AnnotationDetailScreen({ annotation, ctx }: { annotation: StoredAnnotat
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] font-medium text-loupe-fg">{componentCrumb(annotation)}</div>
+          <div className="truncate text-[12.5px] font-medium text-loupe-fg">{annotationHeadline(annotation)}</div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
             <StatusBadge status={annotation.status} />
             <Badge variant="outline">{annotation.group || "Inbox"}</Badge>
@@ -1465,13 +1663,16 @@ function AnnotationActionsMenu({
 
 function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
   const [note, setNote] = React.useState(annotation.note ?? "");
+  const [label, setLabel] = React.useState(annotation.label ?? "");
   const [saving, setSaving] = React.useState(false);
   const [refNotice, setRefNotice] = React.useState<{ tone: "ok" | "error" | "muted"; text: string } | null>(null);
   const fileRef = React.useRef<HTMLInputElement | null>(null);
   const meta = annotation as StoredAnnotation & { resolution?: { primary?: string } };
 
   const savedNote = annotation.note ?? "";
+  const savedLabel = annotation.label ?? "";
   const dirty = note !== savedNote;
+  const labelDirty = label !== savedLabel;
 
   async function save() {
     setSaving(true);
@@ -1484,6 +1685,17 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
     if (r.ok) await ctx.reload();
   }
 
+  async function saveLabel() {
+    setSaving(true);
+    const r = (await chrome.runtime.sendMessage({
+      type: "update-annotation",
+      id: annotation.id,
+      patch: { label },
+    } satisfies LoupeMessage)) as SimpleResult;
+    setSaving(false);
+    if (r.ok) await ctx.reload();
+  }
+
   // Auto-save the note on a short debounce so there's no explicit Save button.
   React.useEffect(() => {
     if (!dirty) return;
@@ -1491,6 +1703,13 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note, dirty]);
+
+  React.useEffect(() => {
+    if (!labelDirty) return;
+    const timer = setTimeout(() => void saveLabel(), 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [label, labelDirty]);
 
   async function setStatus(status: AnnotationStatus) {
     const r = (await chrome.runtime.sendMessage({
@@ -1526,14 +1745,21 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
           {thumbs.map((file) => {
             const src = fileUrl(ctx.bridgeUrl, annotation.dir, file, { pageUrl: location.href, repoRoot: ctx.repoRoot });
             return (
-              <button key={file} type="button" className="h-16 overflow-hidden rounded-lg border border-loupe-line bg-loupe-bg" onClick={() => ctx.setLightbox(src)}>
-                <img src={src} alt="" className="h-full w-auto object-cover" />
+              <button key={file} type="button" className="relative h-16 w-24 overflow-hidden rounded-lg border border-loupe-line bg-loupe-bg" onClick={() => ctx.setLightbox(src)}>
+                <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-lg" />
+                <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" />
               </button>
             );
           })}
         </div>
       ) : null}
       {meta.resolution?.primary ? <div className="mb-2 break-all font-mono text-[11px] text-loupe-faint">{meta.resolution.primary}</div> : null}
+      <Input
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder={componentCrumb(annotation)}
+        className="mb-1.5 font-medium"
+      />
       <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Annotation note..." />
       <div className="mt-1 h-3.5 text-right text-[10.5px] text-loupe-faint">
         {saving ? "Saving…" : dirty ? "Editing…" : null}
@@ -1553,6 +1779,7 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
         <LibraryReferencePicker
           bridgeUrl={ctx.bridgeUrl}
           repoRoot={ctx.repoRoot}
+          container={ctx.overlayContainer}
           refs={ctx.references}
           onAttach={async (ref) => {
             const image = (await chrome.runtime.sendMessage({ type: "reference-image", id: ref.id } satisfies LoupeMessage)) as ReferenceImageResult;
@@ -1577,7 +1804,15 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
         <Button
           variant="outline"
           className="w-full"
-          onClick={() => void setStatus(annotation.status === "resolved" ? "open" : "resolved")}
+          onClick={() => {
+            if (annotation.status === "resolved") {
+              void setStatus("open");
+            } else {
+              // Resolving is the end of working an annotation — drop back to the
+              // list rather than leaving the reviewer stranded on the detail view.
+              void setStatus("resolved").then(() => ctx.setExpanded(null));
+            }
+          }}
         >
           {annotation.status === "resolved" ? "Reopen" : <><CircleCheck className="h-4 w-4" />Resolve</>}
         </Button>
@@ -1598,9 +1833,9 @@ interface RecordingMeta {
   startedAt?: string;
   durationMs?: number;
   video?: string | null;
-  counts?: { console?: number; network?: number; errors?: number; failedRequests?: number };
+  counts?: { console?: number; network?: number; errors?: number; failedRequests?: number; events?: number; keyframes?: number };
   keyframes?: { t?: number; label?: string; file?: string }[];
-  files?: { keyframes?: string[] };
+  files?: { console?: string; network?: string; errors?: string; events?: string; keyframes?: string[] };
 }
 
 function recordingMetaOf(a: StoredAnnotation): RecordingMeta {
@@ -1629,7 +1864,6 @@ function RecordingsTab({ recordings, ctx }: { recordings: StoredAnnotation[]; ct
 }
 
 function RecordingCard({ recording, ctx }: { recording: StoredAnnotation; ctx: ViewerContext }) {
-  const isExpanded = ctx.expanded === recording.id;
   const meta = recordingMetaOf(recording);
   const counts = meta.counts ?? {};
   const failed = counts.failedRequests ?? 0;
@@ -1637,34 +1871,16 @@ function RecordingCard({ recording, ctx }: { recording: StoredAnnotation; ctx: V
   const videoSrc = fileUrl(ctx.bridgeUrl, recording.dir, meta.video || "recording.webm", { pageUrl: location.href, repoRoot: ctx.repoRoot });
   const keyframes = recordingKeyframes(meta);
 
-  const [note, setNote] = React.useState(recording.note ?? "");
-  const [saving, setSaving] = React.useState(false);
-
-  async function save() {
-    setSaving(true);
-    const r = (await chrome.runtime.sendMessage({ type: "update-annotation", id: recording.id, patch: { note } } satisfies LoupeMessage)) as SimpleResult;
-    setSaving(false);
-    if (r.ok) await ctx.reload();
-  }
-
-  async function setStatus(status: AnnotationStatus) {
-    const r = (await chrome.runtime.sendMessage({
-      type: "update-annotation",
-      id: recording.id,
-      patch: { status },
-    } satisfies LoupeMessage)) as SimpleResult;
-    if (r.ok) await ctx.reload();
-  }
-
   return (
-    <article className={cn("overflow-hidden rounded-xl border bg-transparent transition-colors", isExpanded ? "border-loupe-line bg-white/[0.04]" : "border-transparent hover:bg-white/[0.04]")}>
+    <article className="overflow-hidden rounded-xl border border-transparent bg-transparent transition-colors hover:bg-white/[0.04]">
       <RecordingPreview
         videoSrc={videoSrc}
+        hasVideo={Boolean(meta.video)}
         keyframes={keyframes}
         recordingDir={recording.dir}
         ctx={ctx}
       />
-      <button type="button" className="flex w-full items-start gap-2 p-2 text-left" onClick={() => ctx.setExpanded(isExpanded ? null : recording.id)}>
+      <button type="button" className="flex w-full items-start gap-2 p-2 text-left" onClick={() => ctx.setExpanded(recording.id)}>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12.5px] font-medium text-loupe-fg">{recording.title || hostLabel(recording.url)}</div>
           {recording.note ? <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-loupe-muted">{recording.note}</div> : null}
@@ -1676,26 +1892,435 @@ function RecordingCard({ recording, ctx }: { recording: StoredAnnotation; ctx: V
             {errors + failed > 0 ? <Badge variant="outline" className="text-amber-300">{errors + failed} error{errors + failed === 1 ? "" : "s"}</Badge> : null}
           </div>
         </div>
-        <ChevronRight className={cn("mt-1 h-4 w-4 shrink-0 text-loupe-faint transition-transform", isExpanded && "rotate-90")} />
+        <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-loupe-faint" />
       </button>
-      {isExpanded ? (
-        <div className="border-t border-loupe-line px-2 pb-2 pt-2">
-          <div className="mb-2 break-all font-mono text-[11px] text-loupe-faint">{recording.url}</div>
-          <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Recording note..." />
-          <div className="mt-2 flex items-center gap-1.5">
-            <Button variant="default" size="xs" loading={saving} onClick={() => void save()}>Save</Button>
-            <Button variant="outline" size="xs" onClick={() => void setStatus(recording.status === "resolved" ? "open" : "resolved")}>
-              {recording.status === "resolved" ? "Reopen" : "Resolve"}
-            </Button>
-            <DeleteAnnotationButton annotation={recording} onDone={async () => {
-              ctx.setExpanded(null);
-              await ctx.reload();
-            }} />
-          </div>
-        </div>
-      ) : null}
     </article>
   );
+}
+
+function RecordingDetailScreen({ recording, ctx }: { recording: StoredAnnotation; ctx: ViewerContext }) {
+  const meta = recordingMetaOf(recording);
+  const files = meta.files ?? {};
+  const videoSrc = fileUrl(ctx.bridgeUrl, recording.dir, meta.video || "recording.webm", { pageUrl: location.href, repoRoot: ctx.repoRoot });
+  const keyframes = recordingKeyframes(meta);
+  const [selectedRequest, setSelectedRequest] = React.useState<number | null>(null);
+
+  const [sendingAction, setSendingAction] = React.useState<string | null>(null);
+  const [sentAction, setSentAction] = React.useState<string | null>(null);
+  const sendable = ctx.actions.filter((a) => a.id !== "save");
+
+  const network = useRecordingFile(recording.dir, files.network ?? "network.jsonl");
+  const consoleLog = useRecordingFile(recording.dir, files.console ?? "console.log");
+  const errorLog = useRecordingFile(recording.dir, files.errors ?? "errors.jsonl");
+
+  const requests = React.useMemo(() => parseJsonl<NetworkEntry>(network.text), [network.text]);
+  const consoleEntries = React.useMemo(() => parseConsoleLog(consoleLog.text), [consoleLog.text]);
+  const errorEntries = React.useMemo(() => parseJsonl<PageErrorEntry>(errorLog.text), [errorLog.text]);
+
+  async function sendRecording(actionId: string) {
+    if (!actionId) return;
+    setSendingAction(actionId);
+    setSentAction(null);
+    const r = (await chrome.runtime.sendMessage({ type: "annotation-run", id: recording.id, action: actionId } satisfies LoupeMessage)) as SimpleResult;
+    setSendingAction(null);
+    if (r.ok) setSentAction(actionId);
+  }
+
+  const activeRequest = selectedRequest !== null ? requests[selectedRequest] : undefined;
+
+  return (
+    <div className="px-2 pb-2">
+      <div className="sticky top-0 z-10 -mx-2 -mt-2 mb-2 flex items-center gap-2 border-b border-loupe-line/70 bg-loupe-panel px-3 pb-2 pt-2">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title={activeRequest ? "Back to recording" : "Back to recordings"}
+          onClick={() => (activeRequest ? setSelectedRequest(null) : ctx.setExpanded(null))}
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium text-loupe-fg">
+            {activeRequest ? `${activeRequest.method} ${hostLabel(activeRequest.url)}` : recording.title || hostLabel(recording.url)}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={recording.status} />
+            {meta.durationMs ? <Badge variant="outline">{formatClock(meta.durationMs)}</Badge> : null}
+          </div>
+        </div>
+        {!activeRequest ? (
+          <AnnotationActionsMenu
+            actions={sendable}
+            disabled={sendingAction !== null}
+            sentAction={sentAction}
+            sendingAction={sendingAction}
+            onSend={(actionId) => void sendRecording(actionId)}
+          />
+        ) : null}
+      </div>
+
+      {activeRequest ? (
+        <NetworkRequestDetail request={activeRequest} />
+      ) : (
+        <>
+          <div className="mb-2 overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg">
+            <RecordingPreview videoSrc={videoSrc} hasVideo={Boolean(meta.video)} keyframes={keyframes} recordingDir={recording.dir} ctx={ctx} />
+          </div>
+          <div className="mb-2 break-all font-mono text-[11px] text-loupe-faint">{recording.url}</div>
+          <RecordingNoteEditor recording={recording} ctx={ctx} />
+          <RecordingTelemetry
+            requests={requests}
+            requestsState={network}
+            consoleEntries={consoleEntries}
+            consoleState={consoleLog}
+            errorEntries={errorEntries}
+            errorState={errorLog}
+            onOpenRequest={(index) => setSelectedRequest(index)}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function RecordingNoteEditor({ recording, ctx }: { recording: StoredAnnotation; ctx: ViewerContext }) {
+  const [note, setNote] = React.useState(recording.note ?? "");
+  const [saving, setSaving] = React.useState(false);
+  const savedNote = recording.note ?? "";
+  const dirty = note !== savedNote;
+
+  async function save() {
+    setSaving(true);
+    const r = (await chrome.runtime.sendMessage({ type: "update-annotation", id: recording.id, patch: { note } } satisfies LoupeMessage)) as SimpleResult;
+    setSaving(false);
+    if (r.ok) await ctx.reload();
+  }
+
+  async function setStatus(status: AnnotationStatus) {
+    const r = (await chrome.runtime.sendMessage({ type: "update-annotation", id: recording.id, patch: { status } } satisfies LoupeMessage)) as SimpleResult;
+    if (r.ok) await ctx.reload();
+  }
+
+  React.useEffect(() => {
+    if (!dirty) return;
+    const timer = setTimeout(() => void save(), 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note, dirty]);
+
+  return (
+    <div>
+      <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Recording note..." />
+      <div className="mt-1 h-3.5 text-right text-[10.5px] text-loupe-faint">{saving ? "Saving…" : dirty ? "Editing…" : null}</div>
+      <div className="mt-1 flex flex-col gap-1.5">
+        <Button variant="outline" className="w-full" onClick={() => void setStatus(recording.status === "resolved" ? "open" : "resolved")}>
+          {recording.status === "resolved" ? "Reopen" : <><CircleCheck className="h-4 w-4" />Resolve</>}
+        </Button>
+        <DeleteAnnotationButton
+          full
+          annotation={recording}
+          onDone={async () => {
+            ctx.setExpanded(null);
+            await ctx.reload();
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+type FileState = { text: string | null; loading: boolean; error: string | null };
+
+function RecordingTelemetry({
+  requests,
+  requestsState,
+  consoleEntries,
+  consoleState,
+  errorEntries,
+  errorState,
+  onOpenRequest,
+}: {
+  requests: NetworkEntry[];
+  requestsState: FileState;
+  consoleEntries: ParsedConsoleEntry[];
+  consoleState: FileState;
+  errorEntries: PageErrorEntry[];
+  errorState: FileState;
+  onOpenRequest: (index: number) => void;
+}) {
+  type Tab = "network" | "console" | "errors";
+  const [tab, setTab] = React.useState<Tab>("network");
+  const tabs: { key: Tab; label: string; count: number }[] = [
+    { key: "network", label: "Network", count: requests.length },
+    { key: "console", label: "Console", count: consoleEntries.length },
+    { key: "errors", label: "Errors", count: errorEntries.length },
+  ];
+
+  return (
+    <div className="mt-3 border-t border-loupe-line pt-2">
+      <div className="mb-2 flex items-center gap-1">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] transition-colors",
+              tab === t.key ? "bg-white/[0.08] text-loupe-fg" : "text-loupe-muted hover:bg-white/[0.04]",
+            )}
+          >
+            {t.label}
+            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-white/10 px-1 text-[10px] text-loupe-faint">{t.count}</span>
+          </button>
+        ))}
+      </div>
+      {tab === "network" ? (
+        <NetworkRequestList requests={requests} state={requestsState} onOpen={onOpenRequest} />
+      ) : tab === "console" ? (
+        <ConsoleLogList entries={consoleEntries} state={consoleState} />
+      ) : (
+        <ErrorLogList entries={errorEntries} state={errorState} />
+      )}
+    </div>
+  );
+}
+
+function statusTone(entry: NetworkEntry): string {
+  if (entry.error || (entry.status ?? 0) >= 500) return "text-red-300";
+  if ((entry.status ?? 0) >= 400) return "text-amber-300";
+  if ((entry.status ?? 0) >= 300) return "text-sky-300";
+  return "text-loupe-muted";
+}
+
+function NetworkRequestList({ requests, state, onOpen }: { requests: NetworkEntry[]; state: FileState; onOpen: (index: number) => void }) {
+  if (state.loading) return <TelemetryHint>Loading network log…</TelemetryHint>;
+  if (state.error) return <TelemetryHint>Couldn't load network log: {state.error}</TelemetryHint>;
+  if (requests.length === 0) return <TelemetryHint>No network requests captured.</TelemetryHint>;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {requests.map((r, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onOpen(i)}
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/[0.05]"
+        >
+          <span className={cn("w-11 shrink-0 font-mono text-[10.5px] font-semibold", statusTone(r))}>{r.error ? "ERR" : r.status ?? "—"}</span>
+          <span className="w-10 shrink-0 font-mono text-[10.5px] text-loupe-faint">{r.method}</span>
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-loupe-fg" title={r.url}>{shortPath(r.url)}</span>
+          {typeof r.durationMs === "number" ? <span className="shrink-0 font-mono text-[10px] text-loupe-faint">{r.durationMs}ms</span> : null}
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-loupe-faint" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NetworkRequestDetail({ request }: { request: NetworkEntry }) {
+  const rows: [string, string][] = [
+    ["Method", request.method],
+    ["Status", request.error ? `error — ${request.error}` : String(request.status ?? "—")],
+    ["Type", request.kind],
+    ["Duration", typeof request.durationMs === "number" ? `${request.durationMs} ms` : "—"],
+    ["At", `${(request.t / 1000).toFixed(1)}s into the flow`],
+  ];
+  if (request.responseContentType) rows.push(["Content-Type", request.responseContentType]);
+  const captureless = !request.requestHeaders && !request.responseHeaders && request.requestBody === undefined && request.responseBody === undefined;
+
+  return (
+    <div className="flex flex-col gap-3 pb-2">
+      <div className="break-all rounded-lg border border-loupe-line bg-loupe-bg px-2.5 py-2 font-mono text-[11px] text-loupe-fg">
+        <span className={cn("font-semibold", statusTone(request))}>{request.error ? "ERR" : request.status ?? ""}</span> {request.method} {request.url}
+      </div>
+      <DetailSection title="General">
+        <KeyValueTable rows={rows} />
+      </DetailSection>
+      {captureless ? (
+        <TelemetryHint>
+          Headers and bodies weren't captured for this request. Re-record the flow to capture full request/response detail.
+        </TelemetryHint>
+      ) : null}
+      <DetailSection title="Request headers">
+        {request.requestHeaders?.length ? <KeyValueTable rows={request.requestHeaders} mono /> : <TelemetryHint>No request headers.</TelemetryHint>}
+      </DetailSection>
+      <DetailSection title="Request body">
+        <BodyBlock body={request.requestBody} truncated={request.bodyTruncated?.request} contentType={headerValue(request.requestHeaders, "content-type")} />
+      </DetailSection>
+      <DetailSection title="Response headers">
+        {request.responseHeaders?.length ? <KeyValueTable rows={request.responseHeaders} mono /> : <TelemetryHint>No response headers.</TelemetryHint>}
+      </DetailSection>
+      <DetailSection title="Response body">
+        <BodyBlock body={request.responseBody} truncated={request.bodyTruncated?.response} contentType={request.responseContentType} />
+      </DetailSection>
+    </div>
+  );
+}
+
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-semibold tracking-wide text-loupe-faint">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function KeyValueTable({ rows, mono = false }: { rows: [string, string][]; mono?: boolean }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-loupe-line">
+      {rows.map(([key, value], i) => (
+        <div key={`${key}-${i}`} className={cn("flex gap-2 px-2.5 py-1.5 text-[11px]", i > 0 && "border-t border-loupe-line/60")}>
+          <span className="w-32 shrink-0 break-words font-mono text-loupe-faint">{key}</span>
+          <span className={cn("min-w-0 flex-1 break-all text-loupe-fg", mono && "font-mono")}>{value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BodyBlock({ body, truncated, contentType }: { body: string | undefined; truncated?: boolean; contentType?: string }) {
+  if (body === undefined) return <TelemetryHint>Not captured.</TelemetryHint>;
+  if (body === "") return <TelemetryHint>Empty body.</TelemetryHint>;
+  const pretty = prettyBody(body, contentType);
+  return (
+    <div>
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-loupe-line bg-loupe-bg px-2.5 py-2 font-mono text-[11px] leading-relaxed text-loupe-fg">
+        {pretty}
+      </pre>
+      {truncated ? <div className="mt-1 text-[10.5px] text-loupe-faint">Truncated at capture cap.</div> : null}
+    </div>
+  );
+}
+
+function ConsoleLogList({ entries, state }: { entries: ParsedConsoleEntry[]; state: FileState }) {
+  if (state.loading) return <TelemetryHint>Loading console log…</TelemetryHint>;
+  if (state.error) return <TelemetryHint>Couldn't load console log: {state.error}</TelemetryHint>;
+  if (entries.length === 0) return <TelemetryHint>No console output captured.</TelemetryHint>;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {entries.map((e, i) => (
+        <div key={i} className="flex gap-2 rounded-md px-2 py-1 font-mono text-[11px]">
+          {e.t ? <span className="w-10 shrink-0 text-loupe-faint">{e.t}</span> : null}
+          <span className={cn("w-10 shrink-0", consoleTone(e.level))}>{e.level}</span>
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-all text-loupe-fg">{e.text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ErrorLogList({ entries, state }: { entries: PageErrorEntry[]; state: FileState }) {
+  if (state.loading) return <TelemetryHint>Loading errors…</TelemetryHint>;
+  if (state.error) return <TelemetryHint>Couldn't load errors: {state.error}</TelemetryHint>;
+  if (entries.length === 0) return <TelemetryHint>No errors during the flow.</TelemetryHint>;
+  return (
+    <div className="flex flex-col gap-1.5">
+      {entries.map((e, i) => (
+        <div key={i} className="rounded-lg border border-loupe-line bg-loupe-bg px-2.5 py-2">
+          <div className="flex items-center gap-2 text-[11px]">
+            <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-300" />
+            <span className="font-medium text-loupe-fg">{e.kind}</span>
+            <span className="ml-auto font-mono text-[10px] text-loupe-faint">{(e.t / 1000).toFixed(1)}s</span>
+          </div>
+          <div className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px] text-loupe-fg">{e.message}</div>
+          {e.stack ? <div className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px] text-loupe-faint">{e.stack}</div> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TelemetryHint({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-lg border border-loupe-line/60 bg-loupe-bg/50 px-2.5 py-2 text-[11px] text-loupe-faint">{children}</div>;
+}
+
+interface ParsedConsoleEntry {
+  level: string;
+  text: string;
+  t?: string;
+}
+
+function useRecordingFile(dir: string, file: string | undefined): FileState {
+  const [state, setState] = React.useState<FileState>({ text: null, loading: Boolean(file), error: null });
+  React.useEffect(() => {
+    if (!file) {
+      setState({ text: null, loading: false, error: null });
+      return;
+    }
+    let cancelled = false;
+    setState({ text: null, loading: true, error: null });
+    void (chrome.runtime.sendMessage({ type: "recording-file", dir, file } satisfies LoupeMessage) as Promise<RecordingFileResult>)
+      .then((r) => {
+        if (cancelled) return;
+        if (r.ok) setState({ text: r.text, loading: false, error: null });
+        else setState({ text: null, loading: false, error: r.error });
+      })
+      .catch((e) => {
+        if (!cancelled) setState({ text: null, loading: false, error: String(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dir, file]);
+  return state;
+}
+
+function parseJsonl<T>(text: string | null): T[] {
+  if (!text) return [];
+  const out: T[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as T);
+    } catch {
+      // Skip malformed lines rather than dropping the whole log.
+    }
+  }
+  return out;
+}
+
+function parseConsoleLog(text: string | null): ParsedConsoleEntry[] {
+  if (!text) return [];
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => {
+      const m = /^\[([^\]]+)\]\s+(\w+)\s+([\s\S]*)$/.exec(line);
+      if (m) return { t: m[1], level: m[2]!.toLowerCase(), text: m[3]! };
+      return { level: "log", text: line };
+    });
+}
+
+function consoleTone(level: string): string {
+  if (level === "error") return "text-red-300";
+  if (level === "warn") return "text-amber-300";
+  if (level === "debug") return "text-loupe-faint";
+  return "text-loupe-muted";
+}
+
+function headerValue(headers: [string, string][] | undefined, name: string): string | undefined {
+  return headers?.find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+}
+
+function prettyBody(body: string, contentType?: string): string {
+  const looksJson = (contentType && /json/i.test(contentType)) || /^\s*[[{]/.test(body);
+  if (looksJson) {
+    try {
+      return JSON.stringify(JSON.parse(body), null, 2);
+    } catch {
+      // Not valid JSON; show raw.
+    }
+  }
+  return body;
+}
+
+function shortPath(url: string): string {
+  try {
+    const u = new URL(url, location.href);
+    return `${u.pathname}${u.search}` || u.href;
+  } catch {
+    return url;
+  }
 }
 
 function formatClock(ms: number): string {
@@ -1708,16 +2333,18 @@ function RecordingPreview({
   keyframes,
   recordingDir,
   videoSrc,
+  hasVideo = true,
 }: {
   ctx: ViewerContext;
   keyframes: { t?: number; label?: string; file: string }[];
   recordingDir: string;
   videoSrc: string;
+  hasVideo?: boolean;
 }) {
   const [videoFailed, setVideoFailed] = React.useState(false);
   const firstFrame = keyframes[0];
 
-  if (!videoFailed) {
+  if (hasVideo && !videoFailed) {
     return (
       <video
         src={videoSrc}
@@ -1760,10 +2387,19 @@ function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }
   const [query, setQuery] = React.useState("");
   const [deleting, setDeleting] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [collapsed, setCollapsed] = React.useState<Set<string>>(() => new Set());
   const groups = React.useMemo(() => filterReferencesByPage(refs, query), [refs, query]);
 
+  function toggle(url: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  }
+
   async function deleteItem(ref: ReferenceItem) {
-    if (!window.confirm("Delete this library reference?")) return;
     setDeleting(ref.id);
     setError(null);
     const r = (await chrome.runtime.sendMessage({ type: "delete-reference", id: ref.id } satisfies LoupeMessage)) as SimpleResult;
@@ -1775,8 +2411,7 @@ function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }
     await ctx.reload();
   }
 
-  async function deletePage(url: string, count: number) {
-    if (!window.confirm(`Delete ${count} reference${count === 1 ? "" : "s"} from this page?`)) return;
+  async function deletePage(url: string) {
     setDeleting(url);
     setError(null);
     const r = (await chrome.runtime.sendMessage({ type: "delete-reference-page", url } satisfies LoupeMessage)) as SimpleResult;
@@ -1789,222 +2424,144 @@ function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }
   }
 
   return (
-    <div className="space-y-3 px-3 pb-3">
-      <Input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search library" />
-      {error ? (
-        <div className="rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-[12px] text-loupe-fg">{error}</div>
-      ) : null}
+    <div className="pb-2">
+      <div className="px-2 pb-1">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-loupe-faint" />
+          <Input className="h-8 pl-8" value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Search library" />
+        </div>
+        {error ? (
+          <div className="mt-2 rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-[12px] text-loupe-fg">{error}</div>
+        ) : null}
+      </div>
       {refs.length === 0 ? (
-        <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
-          No saved references yet
-        </div>
+        <div className="px-6 py-12 text-center text-[12px] text-loupe-faint">No saved references yet</div>
       ) : groups.length === 0 ? (
-        <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
-          No matches
-        </div>
+        <div className="px-6 py-12 text-center text-[12px] text-loupe-faint">No matches</div>
       ) : (
-        groups.map((group) => (
-          <section key={group.url} className="overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg/35">
-            <div className="flex items-start gap-2 border-b border-loupe-line px-3 py-2">
-              <div className="min-w-0">
-                <div className="line-clamp-1 text-[12px] font-semibold text-loupe-fg">{group.title || hostLabel(group.url)}</div>
-                <div className="mt-0.5 line-clamp-1 text-[10.5px] text-loupe-faint">{group.url}</div>
+        groups.map((group) => {
+          const isCollapsed = collapsed.has(group.url);
+          return (
+            <div key={group.url} className="pb-1">
+              <div className="group flex items-center gap-2 px-3.5 pb-1.5 pt-3 text-[11px] text-loupe-faint">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/5"
+                  onClick={() => toggle(group.url)}
+                  title={group.url}
+                >
+                  <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !isCollapsed && "rotate-90")} />
+                  <span className="truncate text-[12px] font-medium text-loupe-muted">{group.title || hostLabel(group.url)}</span>
+                  <span className="shrink-0">{group.items.length}</span>
+                </button>
+                <LibrarySectionMenu className="ml-auto" disabled={deleting !== null} onDeletePage={() => void deletePage(group.url)} />
               </div>
-              <Badge variant="outline" className="ml-auto shrink-0">{group.items.length}</Badge>
-              <Button
-                variant="destructive"
-                size="xs"
-                className="shrink-0"
-                disabled={deleting !== null}
-                onClick={() => void deletePage(group.url, group.items.length)}
-                title="Delete page references"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Page
-              </Button>
+              {!isCollapsed ? (
+                <div className="space-y-2 px-2">
+                  {group.items.map((ref) => {
+                    const src = fileUrl(ctx.bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
+                    return (
+                      <ItemCard
+                        key={ref.id}
+                        imageSrc={src}
+                        imageTitle="Open reference image"
+                        onImageOpen={() => ctx.setLightbox(src)}
+                        title={ref.note || ref.title || "Untitled reference"}
+                        badges={<Badge variant="outline">{formatCaptureDate(ref.createdAt)}</Badge>}
+                        openTitle="Open source page"
+                        onOpen={ref.url ? () => window.open(ref.url, "_blank", "noopener,noreferrer") : undefined}
+                        more={<ReferenceMoreButton refItem={ref} deleting={deleting === ref.id} onDelete={() => void deleteItem(ref)} />}
+                      />
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
-            <div className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2">
-              {group.items.map((ref) => {
-                const src = fileUrl(ctx.bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
-                return (
-                  <article key={ref.id} className="overflow-hidden rounded-lg border border-loupe-line bg-loupe-panel/55">
-                    <button type="button" className="block aspect-[16/9] w-full border-b border-loupe-line bg-black/40" onClick={() => ctx.setLightbox(src)}>
-                      <img src={src} alt="" className="h-full w-full object-cover" />
-                    </button>
-                    <div className="space-y-1 p-2.5">
-                      <div className="line-clamp-1 text-[12px] font-medium text-loupe-fg">{ref.note || ref.title || "Untitled reference"}</div>
-                      <div className="text-[10.5px] text-loupe-faint">{formatCaptureDate(ref.createdAt)}</div>
-                      <div className="flex items-center gap-1.5 pt-1">
-                        {ref.url ? (
-                          <Button variant="outline" size="xs" onClick={() => window.open(ref.url, "_blank", "noopener,noreferrer")}>
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            Open
-                          </Button>
-                        ) : null}
-                        <Button
-                          className="ml-auto"
-                          variant="destructive"
-                          size="xs"
-                          loading={deleting === ref.id}
-                          disabled={deleting !== null}
-                          onClick={() => void deleteItem(ref)}
-                        >
-                          {deleting === ref.id ? null : <Trash2 className="h-3.5 w-3.5" />}
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        ))
+          );
+        })
       )}
     </div>
+  );
+}
+
+/** Section-level "More" menu for a library page group, matching the annotation
+ * group actions menu. */
+function LibrarySectionMenu({ className, disabled, onDeletePage }: { className?: string; disabled?: boolean; onDeletePage: () => void }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className={cn(
+            "opacity-70 transition-all hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100",
+            open && "opacity-100",
+            className,
+          )}
+          title="More section actions"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <MenuItem disabled={disabled} onSelect={onDeletePage} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
+          Delete page references
+        </MenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function LibraryReferencePicker({
   bridgeUrl,
   repoRoot,
+  container,
   refs,
   onAttach,
 }: {
   bridgeUrl: string;
   repoRoot?: string;
+  /** Portal target for the picker modal — the shadow-root overlay mount so it stays styled. */
+  container?: HTMLElement | null;
   refs: ReferenceItem[];
   onAttach: (ref: ReferenceItem) => Promise<void>;
 }) {
   const [open, setOpen] = React.useState(false);
-  const [query, setQuery] = React.useState("");
-  const [collapsedDomains, setCollapsedDomains] = React.useState<Set<string>>(() => new Set());
-  const [attaching, setAttaching] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const grouped = React.useMemo(() => filterReferencesByDomain(refs, query), [refs, query]);
 
-  async function attach(ref: ReferenceItem) {
-    setAttaching(ref.id);
-    setError(null);
-    try {
-      await onAttach(ref);
-      setOpen(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setAttaching(null);
-    }
-  }
-
-  function toggleDomain(domain: string) {
-    setCollapsedDomains((current) => {
-      const next = new Set(current);
-      if (next.has(domain)) next.delete(domain);
-      else next.add(domain);
-      return next;
-    });
-  }
+  const items = React.useMemo<LibraryItem[]>(
+    () =>
+      refs.map((ref) => ({
+        id: ref.id,
+        caption: ref.note || ref.title || "Untitled reference",
+        url: ref.url,
+        createdAt: ref.createdAt,
+        thumbUrl: fileUrl(bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot }),
+      })),
+    [refs, bridgeUrl, repoRoot],
+  );
 
   return (
-    <div className={cn("relative", open && "basis-full")} data-loupe-library-popover={open ? "" : undefined}>
-      <Button
-        type="button"
-        variant="outline"
-        size="xs"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
+    <>
+      <Button type="button" variant="outline" size="xs" aria-expanded={open} onClick={() => setOpen(true)}>
         <Library className="h-3.5 w-3.5" />
         From library
       </Button>
       {open ? (
-        <div className="mt-2 flex max-h-96 w-full flex-col overflow-hidden rounded-xl border border-loupe-line bg-loupe-panel text-loupe-fg shadow-xl shadow-black/40">
-            <div className="flex items-start gap-3 border-b border-loupe-line px-3 py-2.5">
-              <div className="min-w-0">
-                <div className="text-[13px] font-semibold leading-none">Reference library</div>
-                <div className="mt-1 text-[11px] text-loupe-muted">Choose a capture to attach.</div>
-              </div>
-              <Button variant="ghost" size="icon-sm" className="ml-auto h-7 w-7" title="Close library" onClick={() => setOpen(false)}>
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <div className="border-b border-loupe-line p-2.5">
-              <Input
-                className="h-8"
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search library"
-              />
-            </div>
-            <div className="flex-1 overflow-y-auto p-2.5">
-              {error ? (
-                <div className="mb-3 rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-[12px] text-loupe-fg">
-                  {error}
-                </div>
-              ) : null}
-              {refs.length === 0 ? (
-                <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
-                  No saved references yet
-                </div>
-              ) : grouped.length === 0 ? (
-                <div className="rounded-lg border border-loupe-line bg-loupe-bg/50 px-4 py-8 text-center text-[12px] text-loupe-faint">
-                  No matches
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {grouped.map(([domain, items]) => (
-                    <section key={domain} className="space-y-2">
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[11px] font-medium text-loupe-muted transition-colors hover:bg-white/5 hover:text-loupe-fg"
-                        onClick={() => toggleDomain(domain)}
-                      >
-                        <ChevronRight
-                          className={cn(
-                            "h-3.5 w-3.5 shrink-0 transition-transform",
-                            (query.trim() || !collapsedDomains.has(domain)) && "rotate-90",
-                          )}
-                        />
-                        <span>{domain}</span>
-                        <span className="ml-auto text-loupe-faint">{items.length}</span>
-                      </button>
-                      {query.trim() || !collapsedDomains.has(domain) ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {items.map((ref) => {
-                          const src = fileUrl(bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot });
-                          return (
-                            <button
-                              key={ref.id}
-                              type="button"
-                              className="group overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg/70 text-left transition-all hover:border-loupe-line-strong hover:bg-white/[0.04] active:scale-[0.99]"
-                              onClick={() => void attach(ref)}
-                              disabled={attaching !== null}
-                            >
-                              <div className="aspect-[16/9] border-b border-loupe-line bg-black/40">
-                                <img src={src} alt="" className="h-full w-full object-cover" />
-                              </div>
-                              <div className="space-y-1 p-2.5">
-                                <div className="line-clamp-1 text-[12px] font-medium text-loupe-fg">
-                                  {ref.note || ref.title || "Untitled reference"}
-                                </div>
-                                <div className="line-clamp-1 text-[10.5px] text-loupe-faint">{ref.url || ref.id}</div>
-                                <div className="text-[10.5px] text-loupe-faint">{formatCaptureDate(ref.createdAt)}</div>
-                                <div className="flex items-center gap-1 pt-1 text-[11px] font-medium text-loupe-muted group-hover:text-loupe-fg">
-                                  {attaching === ref.id ? <><Spinner className="h-3 w-3" />Attaching</> : "Attach"}
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div> : null}
-                    </section>
-                  ))}
-                </div>
-              )}
-            </div>
-        </div>
+        <LibraryPicker
+          items={items}
+          container={container}
+          onClose={() => setOpen(false)}
+          onAttach={async (id) => {
+            const ref = refs.find((r) => r.id === id);
+            if (!ref) return;
+            await onAttach(ref);
+          }}
+        />
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -2288,20 +2845,6 @@ function hasLoupeDragData(event: React.DragEvent): boolean {
   return types.includes("application/x-loupe-annotation-id") || types.includes("application/x-loupe-group-slug");
 }
 
-function filterReferencesByDomain(refs: ReferenceItem[], query: string): Array<[string, ReferenceItem[]]> {
-  const q = normalizeSearch(query);
-  const map = new Map<string, ReferenceItem[]>();
-  for (const ref of refs) {
-    const key = hostLabel(ref.url);
-    const domainMatch = normalizeSearch(key).includes(q);
-    const refMatch = referenceMatches(ref, q);
-    if (q && !domainMatch && !refMatch) continue;
-    (map.get(key) ?? map.set(key, []).get(key)!).push(ref);
-  }
-  return [...map.entries()]
-    .map(([domain, items]) => [domain, sortReferencesByCapture(items)] as [string, ReferenceItem[]])
-    .sort(([, a], [, b]) => referenceTime(b[0]) - referenceTime(a[0]));
-}
 
 interface ReferencePageGroup {
   url: string;
@@ -2355,9 +2898,14 @@ function componentCrumb(a: StoredAnnotation): string {
   return a.target.componentChain.map((c) => c.name).join(" › ") || a.target.tag;
 }
 
+/** The card headline: the human/agent-authored title when set, else the component crumb. */
+function annotationHeadline(a: StoredAnnotation): string {
+  return a.label?.trim() || componentCrumb(a);
+}
+
 function annotationMatches(a: StoredAnnotation, query: string): boolean {
   if (!query) return true;
-  return [a.note, componentCrumb(a), a.group, a.groupSlug, a.title, hostLabel(a.url), a.target.text].some((value) =>
+  return [a.label, a.note, componentCrumb(a), a.group, a.groupSlug, a.title, hostLabel(a.url), a.target.text].some((value) =>
     normalizeSearch(value ?? undefined).includes(query),
   );
 }

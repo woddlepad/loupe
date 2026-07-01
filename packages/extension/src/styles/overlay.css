@@ -2,6 +2,7 @@
  * Tailwind scans core + extension + @loupe/ui TS for the classes used here. */
 @import "@loupe/ui/styles/tokens.css";
 @import "@loupe/ui/styles/fonts.css";
+@import "sonner/dist/styles.css";
 
 @source "../**/*.{ts,tsx,html}";
 @source "../../../core/src/**/*.{ts,tsx}";
@@ -50,6 +51,80 @@
   .loupe-animate-fade {
     animation: none;
   }
+}
+
+/* Sonner toast polish. Sonner ships the entrance/exit + stacking; we tune the
+ * chrome (font, weight, shadow) and give the leading icon a branded tint plus
+ * a small spring so a save reads as a deliberate confirmation, not a log line. */
+@keyframes loupe-toast-icon-pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.loupe-toast {
+  gap: 11px;
+  padding: 13px 15px;
+  font-family: var(--font-sans);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.24),
+    0 14px 34px -10px rgba(0, 0, 0, 0.6);
+}
+
+.loupe-toast-title {
+  font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+.loupe-toast-description {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.loupe-toast-icon {
+  margin-top: 1px;
+  animation: loupe-toast-icon-pop 420ms cubic-bezier(0.34, 1.56, 0.64, 1) 60ms both;
+}
+
+[data-sonner-toast][data-type="success"] .loupe-toast-icon {
+  color: oklch(0.72 0.16 162);
+}
+
+[data-sonner-toast][data-type="error"] .loupe-toast-icon {
+  color: var(--destructive);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loupe-toast-icon {
+    animation: none;
+  }
+}
+
+/* Radix layers (dropdown / select / dialog / popover …) live inside the panel
+ * iframe. Their exit animation never emits `animationend` there — a quirk of
+ * running the React tree inside the iframe — so Radix Presence would keep a
+ * *closed* layer mounted forever. Those lingering layers stack as stale
+ * dismissable layers and break outside-click / Escape dismissal for the next
+ * menu that opens. Neutralise the close animation so closed content unmounts
+ * immediately; the open animation (data-state="open") is untouched. */
+[data-slot="dropdown-menu-content"][data-state="closed"],
+[data-slot="select-content"][data-state="closed"],
+[data-slot="context-menu-content"][data-state="closed"],
+[data-slot="menubar-content"][data-state="closed"],
+[data-slot="popover-content"][data-state="closed"],
+[data-slot="dialog-content"][data-state="closed"],
+[data-slot="dialog-overlay"][data-state="closed"] {
+  animation: none !important;
 }
 
 /* Every interactive control inside the overlay/iframe should show the pointer

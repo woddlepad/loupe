@@ -243,7 +243,8 @@ function agentHint(name: string, cmd: AgentCommand): string {
 
 function closeLoop(agentName: string): string {
   return (
-    "When done, run " +
+    'When done, first give the annotation a concise human-readable title so the human can recognize it later while browsing the backlog: ' +
+    'loupe title <annotation_id> "<title>" (5–8 words describing the change, not the component name). Then run ' +
     `loupe status <annotation_id> --status needs_review --author agent:${agentName} ` +
     "to move it to review. Do not mark the annotation resolved yourself; leave it for human review."
   );
@@ -252,13 +253,13 @@ function closeLoop(agentName: string): string {
 function buildPrompt(agentName: string, a: Annotation, bundle: WrittenBundle, r: SourceResolution): string {
   const chain = a.target.componentChain.map((c) => c.name).join(" › ") || "(unknown component)";
   const slot = a.target.dataAttributes["data-slot"];
-  const suggestions = a.acceptedSuggestions.map((s) => `- ${s.label}: ${s.detail}`).join("\n");
 
   return [
     "You're picking up a UI annotation captured with Loupe. Make the change in the source, then summarize what you did.",
     "",
     `Annotation bundle: ${bundle.dir} (screenshot at ${bundle.screenshot ? "./shot.png" : "n/a"})`,
     `Page: ${a.title} — ${a.url}`,
+    a.label ? `Current title: ${a.label}` : "Current title: (unset — give it a descriptive one when you close the loop)",
     a.group ? `Group: ${a.group}` : "",
     `Component: ${chain}${slot ? ` (data-slot="${slot}")` : ""}`,
     r.primary
@@ -272,7 +273,6 @@ function buildPrompt(agentName: string, a: Annotation, bundle: WrittenBundle, r:
     bundle.references.length
       ? `Reference images (what it should look like): ${bundle.references.join(", ")}`
       : "",
-    suggestions ? `Suggested fixes:\n${suggestions}` : "",
     "",
     closeLoop(agentName),
   ]
@@ -323,7 +323,7 @@ function buildGroupPrompt(agentName: string, group: string, annotations: StoredA
     "",
     ...lines,
     "",
-    `After implementing each, run \`loupe status <id> --status needs_review --author agent:${agentName}\`. Do not mark annotations resolved yourself; leave them for human review. Then summarize the whole change set.`,
+    `After implementing each, give it a concise human-readable title with \`loupe title <id> "<title>"\` (5–8 words describing the change), then run \`loupe status <id> --status needs_review --author agent:${agentName}\`. Do not mark annotations resolved yourself; leave them for human review. Then summarize the whole change set.`,
   ].join("\n");
 }
 

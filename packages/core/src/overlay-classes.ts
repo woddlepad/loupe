@@ -31,8 +31,6 @@ export const C = {
     "absolute right-2 top-2 w-7 h-7 grid place-items-center rounded-md text-loupe-muted hover:text-loupe-fg hover:bg-white/5 cursor-pointer transition-colors",
   title: "text-[13px] font-semibold leading-tight",
   crumbs: "text-[11px] text-loupe-muted mt-1 break-words leading-snug",
-  chips: "flex flex-wrap gap-1.5 mt-2.5",
-  chip: "inline-flex items-center gap-1.5 rounded-full border border-loupe-line bg-loupe-elev/50 text-loupe-muted text-[12px] px-2.5 py-1 cursor-pointer select-none transition-colors hover:bg-loupe-elev data-[on=true]:bg-loupe-accent/15 data-[on=true]:border-loupe-accent/40 data-[on=true]:text-loupe-fg",
   textarea:
     "mt-2.5 w-full box-border min-h-[64px] resize-y rounded-lg bg-loupe-bg/80 border border-loupe-line text-loupe-fg text-[13px] p-2 outline-none transition-colors focus:border-loupe-accent/60 placeholder:text-loupe-faint",
   groupCombo: "relative mt-2",
@@ -41,20 +39,21 @@ export const C = {
   groupComboPlaceholder: "text-loupe-faint",
   groupComboPopover:
     "absolute left-0 right-0 top-[calc(100%+4px)] z-[1] overflow-hidden rounded-lg border border-loupe-line bg-loupe-panel shadow-2xl shadow-black/50",
-  groupComboSearchWrap: "p-1.5 border-b border-loupe-line",
+  groupComboSearchWrap: "border-b border-loupe-line px-2.5 py-2",
   groupComboSearch:
-    "w-full box-border rounded-md bg-loupe-bg/80 border border-loupe-line text-loupe-fg text-[12px] px-2 py-1.5 outline-none transition-colors focus:border-loupe-accent/60 placeholder:text-loupe-faint",
+    "w-full box-border bg-transparent text-loupe-fg text-[12px] outline-none placeholder:text-loupe-faint",
   groupComboMenu: "max-h-40 overflow-y-auto p-1",
   groupComboItem:
     "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-loupe-muted hover:bg-white/5 hover:text-loupe-fg cursor-pointer",
   groupComboCheck: "ml-auto text-loupe-fg opacity-0",
   groupComboCheckSelected: "ml-auto text-loupe-fg opacity-100",
   groupComboCreate:
-    "w-full rounded-md border-t border-loupe-line px-2 py-1.5 text-left text-[12px] text-loupe-fg hover:bg-white/5 cursor-pointer",
+    "w-full rounded-md px-2 py-1.5 text-left text-[12px] text-loupe-fg hover:bg-white/5 cursor-pointer",
   refsRow: "flex items-center gap-1.5 mt-2 flex-wrap",
   refThumb:
     "relative w-12 h-12 rounded-md border border-loupe-line overflow-hidden group/ref bg-loupe-bg",
-  refImg: "w-full h-full object-cover",
+  refImg: "absolute inset-0 w-full h-full object-contain",
+  refImgBlur: "absolute inset-0 w-full h-full object-cover scale-110 blur-lg",
   refRemove:
     "absolute top-0.5 right-0.5 w-4 h-4 grid place-items-center rounded bg-black/70 text-white text-[10px] leading-none opacity-0 group-hover/ref:opacity-100 cursor-pointer",
   addRef:
@@ -63,7 +62,7 @@ export const C = {
     "h-12 px-2.5 inline-flex items-center gap-1.5 rounded-md border border-loupe-line bg-loupe-bg/70 text-loupe-muted hover:text-loupe-fg hover:border-loupe-line-strong text-[11px] cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50",
   pickerWrap: "fixed inset-0 z-[2147483647] grid place-items-center bg-black/70 p-4 text-loupe-fg",
   picker:
-    "flex max-h-[min(760px,calc(100vh-2rem))] w-[min(920px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl bg-loupe-panel border border-loupe-line shadow-2xl shadow-black/60",
+    "flex max-h-[min(600px,calc(100vh-2rem))] w-[min(560px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl bg-loupe-panel border border-loupe-line shadow-2xl shadow-black/60",
   pickerHeader: "flex items-start gap-3 border-b border-loupe-line px-4 py-3",
   pickerTitle: "text-[13px] font-semibold leading-none",
   pickerDescription: "mt-1 text-[11px] text-loupe-muted",
@@ -78,7 +77,7 @@ export const C = {
   pickerGrid: "grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2",
   pickCell:
     "overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg/70 text-left hover:border-loupe-line-strong hover:bg-white/[0.04] cursor-pointer p-0 transition-all active:scale-[0.99] disabled:opacity-50",
-  pickImgWrap: "aspect-[16/9] border-b border-loupe-line bg-black/40",
+  pickImgWrap: "relative overflow-hidden aspect-[16/9] border-b border-loupe-line bg-black/40",
   pickText: "p-2.5 text-[12px] font-medium text-loupe-fg leading-snug line-clamp-1",
   pickMeta: "px-2.5 pb-2.5 text-[10.5px] text-loupe-faint leading-snug line-clamp-1",
   actions: "flex flex-col gap-1.5 mt-2.5",

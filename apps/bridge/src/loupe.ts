@@ -7,7 +7,7 @@ import type { AnnotationStatus } from "@loupe/core/model";
 import { createBridge } from "./server.js";
 import { loadConfig } from "./config.js";
 import { initProject } from "./project.js";
-import { groupSummaries, listAnnotations, listRecordings, setAnnotationStatus, type StoredAnnotation } from "./store.js";
+import { groupSummaries, listAnnotations, listRecordings, setAnnotationStatus, updateAnnotation, type StoredAnnotation } from "./store.js";
 
 const STATUS_VALUES = ["open", "needs_review", "resolved"] as const satisfies readonly AnnotationStatus[];
 
@@ -21,6 +21,7 @@ async function main(): Promise<void> {
   if (cmd === "list" || cmd === "ls") return list(args.slice(1));
   if (cmd === "show") return show(args.slice(1));
   if (cmd === "status") return status(args.slice(1));
+  if (cmd === "title") return title(args.slice(1));
   if (cmd === "install-skill") return installSkill();
 
   throw new Error(`unknown command "${cmd}"`);
@@ -90,7 +91,7 @@ function list(args: string[]): void {
   for (const group of groups) {
     console.log(`${group.group} (${group.open}/${group.count} open)`);
     for (const a of annotations.filter((item) => item.groupSlug === group.slug)) {
-      console.log(`  ${a.id}  ${a.status ?? "open"}  ${a.note || "(no note)"}`);
+      console.log(`  ${a.id}  ${a.status ?? "open"}  ${a.label || a.note || "(no note)"}`);
     }
     console.log("");
   }
@@ -127,6 +128,18 @@ function status(args: string[]): void {
   const ok = setAnnotationStatus(repo, id, next, strFlag(args, "--author"));
   if (!ok) throw new Error(`annotation ${id} not found`);
   console.log(`${id} → ${next}`);
+}
+
+function title(args: string[]): void {
+  const positionals = args.filter((arg) => !arg.startsWith("-"));
+  const id = positionals[0];
+  if (!id) throw new Error('usage: loupe title <annotation_id> "<title>" [--repo <path>]');
+  const label = (strFlag(args, "--title") ?? positionals.slice(1).join(" ")).trim();
+  if (!label) throw new Error("missing title text");
+  const repo = repoRoot(args);
+  const ok = updateAnnotation(repo, id, { label });
+  if (!ok) throw new Error(`annotation ${id} not found`);
+  console.log(`${id} → "${label}"`);
 }
 
 function installSkill(): void {
@@ -185,6 +198,7 @@ function renderContext(repo: string, target: string, annotations: StoredAnnotati
     "- Use URL, selector, data attributes, visible text, and source hints to find the code.",
     "- If source is unresolved, search using route segments, data-testid values, labels, selected text, and classes.",
     "- Keep changes focused. Run relevant checks.",
+    "- Give each annotation a concise, human-readable title so the human can recognize it later while browsing the backlog: `loupe title <id> \"<title>\"` (5–8 words describing the change, not the component name).",
     "- When done, run `loupe status <id> --status needs_review` for each implemented annotation.",
     "",
   ];
@@ -201,6 +215,7 @@ function renderAnnotation(repo: string, a: StoredAnnotation, index: number): str
   return [
     `## ${index}. Annotation \`${a.id}\``,
     "",
+    `- Title: ${a.label || "(unset — set a concise one with `loupe title`)"}`,
     `- Status: \`${a.status ?? "open"}\``,
     `- Group: \`${a.group ?? a.groupSlug}\``,
     `- Bundle: \`${dir}\``,
@@ -330,6 +345,7 @@ Usage:
   loupe list [--repo <path>] [--json]
   loupe show <group|annotation_id> [--repo <path>] [--json]
   loupe status <annotation_id> --status open|needs_review|resolved [--author agent:codex] [--repo <path>]
+  loupe title <annotation_id> "<short descriptive title>" [--repo <path>]
   loupe install-skill
 
 Initialize a project once from its repo root:

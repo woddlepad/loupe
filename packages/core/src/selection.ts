@@ -3,8 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { captureTarget as defaultCaptureTarget, dominantElement, rectOf } from "./capture.js";
 import { editPanelElement, type LoupeEditPanelProps } from "./edit-panel.js";
 import { C, GITHUB_LOGO_SVG, GITHUB_REPO_URL } from "./overlay-classes.js";
-import type { ActionDescriptor, Annotation, AnnotationTarget, Rect, RecordingCapture, Suggestion, SuggestionKind } from "./model.js";
-import { suggestionsFor } from "./suggestions.js";
+import type { ActionDescriptor, Annotation, AnnotationTarget, Rect, RecordingCapture } from "./model.js";
 
 export interface LoupeOverlayOptions {
   /** Called when the user picks an action. Returns when delivery is done. */
@@ -78,7 +77,6 @@ export interface LoupeOverlayDraft {
   scroll: { x: number; y: number };
   note: string;
   group?: string;
-  acceptedKinds: SuggestionKind[];
   references: { dataUrl: string }[];
   updatedAt: string;
 }
@@ -101,7 +99,6 @@ interface EditSessionConfig {
   marquee: Rect | null;
   videoUrl?: string | null;
   screenshotUrl?: string | null;
-  suggestions: Suggestion[];
   showGroup: boolean;
   showRefs: boolean;
   actions: ActionDescriptor[];
@@ -118,8 +115,6 @@ export class LoupeOverlay {
   private phase: Phase = "off";
   private start = { x: 0, y: 0 };
   private current: Rect = { x: 0, y: 0, width: 0, height: 0 };
-  private accepted = new Set<SuggestionKind>();
-  private offered: Suggestion[] = [];
   private refs: { dataUrl: string }[] = [];
   private renderNonce = 0;
   private hoveredEl: Element | null = null;
@@ -207,8 +202,6 @@ export class LoupeOverlay {
     this.recording = null;
     this.phase = "off";
     this.renderNonce++;
-    this.accepted.clear();
-    this.offered = [];
     this.editRefsEnabled = false;
     this.hoveredEl = null;
     this.mouseDownEl = null;
@@ -487,11 +480,9 @@ export class LoupeOverlay {
       this.renderArmed();
       return;
     }
-    this.accepted.clear();
     this.refs = [];
     this.editNote = "";
     this.editGroup = this.opts.defaultGroup;
-    this.offered = this.withHostHidden(() => suggestionsFor(targetEl));
     this.reportDraft();
     void this.opts.onSelectionCapture(this.selection);
     void this.renderEditing(targetEl, ++this.renderNonce);
@@ -502,11 +493,9 @@ export class LoupeOverlay {
     this.setInspectCursor(false);
     this.hoveredEl = null;
     this.hoverCaptureNonce++;
-    this.accepted.clear();
     this.refs = [];
     this.editNote = "";
     this.editGroup = this.opts.defaultGroup;
-    this.offered = this.withHostHidden(() => suggestionsFor(targetEl));
     this.reportDraft();
     void this.opts.onSelectionCapture(this.selection);
     void this.renderEditing(targetEl, ++this.renderNonce);
@@ -625,9 +614,7 @@ export class LoupeOverlay {
 
   private enterRecordingEditing(): void {
     this.phase = "editing";
-    this.accepted.clear();
     this.refs = [];
-    this.offered = [];
     this.editNote = "";
     this.editGroup = this.opts.defaultGroup;
     this.renderRecordingEditing(++this.renderNonce);
@@ -654,7 +641,6 @@ export class LoupeOverlay {
       panelWidth: "min(360px, calc(100vw - 24px))",
       marquee: null,
       videoUrl: this.recording?.videoDataUrl ?? null,
-      suggestions: [],
       showGroup: true,
       showRefs: false,
       actions: actionLast(this.opts.actions, "save"),
@@ -677,7 +663,6 @@ export class LoupeOverlay {
       devicePixelRatio: window.devicePixelRatio || 1,
       scroll: { x: window.scrollX, y: window.scrollY },
       target: { tag: "body", selector: "body", text: "", dataAttributes: {}, className: "", componentChain: [] },
-      acceptedSuggestions: [],
       note: this.editNote.trim(),
       references: [],
       createdAt: nowIso(),
@@ -692,7 +677,6 @@ export class LoupeOverlay {
     if (!this.draft || this.draft.mode !== this.opts.mode) return false;
     this.phase = "editing";
     this.current = { ...this.draft.rect };
-    this.accepted = new Set(this.draft.acceptedKinds);
     this.refs = this.draft.references.map((r) => ({ dataUrl: r.dataUrl }));
     this.editNote = this.draft.note;
     this.editGroup = this.draft.group ?? this.opts.defaultGroup;
@@ -701,7 +685,6 @@ export class LoupeOverlay {
       this.arm();
       return true;
     }
-    this.offered = this.withHostHidden(() => suggestionsFor(targetEl));
     void this.renderEditing(targetEl, ++this.renderNonce);
     return true;
   }
@@ -757,7 +740,6 @@ export class LoupeOverlay {
       crumbsText: isRef ? `reference · ${location.host}` : undefined,
       placeholder: isRef ? "what this shows / what to match…" : "what's wrong / what to change…",
       marquee: { ...this.current },
-      suggestions: isRef ? [] : this.offered,
       showGroup: !isRef,
       showRefs: !isRef,
       actions: isRef
@@ -812,14 +794,6 @@ export class LoupeOverlay {
           this.opts.groups = [...this.opts.groups, name];
         }
       },
-      suggestions: cfg.suggestions,
-      acceptedKinds: [...this.accepted],
-      onToggleSuggestion: (kind) => {
-        if (this.accepted.has(kind)) this.accepted.delete(kind);
-        else this.accepted.add(kind);
-        this.reportDraft();
-        this.renderEditPanel();
-      },
       showRefs: cfg.showRefs,
       refs: this.refs.map((r) => ({ dataUrl: r.dataUrl })),
       onAddFiles: (files) => {
@@ -849,6 +823,8 @@ export class LoupeOverlay {
   private handlePanelRef = (el: HTMLElement | null): void => {
     this.editPanelEl = el;
     if (!el || !this.editConfig) return;
+    // Keep the panel's own overflow scroll from chaining out to the page.
+    el.style.overscrollBehavior = "contain";
     if (this.editConfig.placement === "centered") this.trackCenteredPanelPlacement(el);
     else this.trackPanelPlacement(el);
   };
@@ -918,7 +894,6 @@ export class LoupeOverlay {
       devicePixelRatio: window.devicePixelRatio || 1,
       scroll: { x: window.scrollX, y: window.scrollY },
       target,
-      acceptedSuggestions: this.offered.filter((s) => this.accepted.has(s.kind)),
       note: this.editNote.trim(),
       references: this.refs.map((r) => ({ dataUrl: r.dataUrl })),
       createdAt: nowIso(),
@@ -940,7 +915,6 @@ export class LoupeOverlay {
       scroll: { x: window.scrollX, y: window.scrollY },
       note,
       group: group || undefined,
-      acceptedKinds: [...this.accepted],
       references: this.refs.map((r) => ({ dataUrl: r.dataUrl })),
       updatedAt: nowIso(),
     };
@@ -956,6 +930,8 @@ export class LoupeOverlay {
     window.addEventListener("pointerdown", this.onOverlayPointerStartMaster, true);
     window.addEventListener("touchstart", this.onOverlayPointerStartMaster, true);
     window.addEventListener("click", this.onOverlayClickMaster, true);
+    window.addEventListener("wheel", this.onScrollLock, { capture: true, passive: false });
+    window.addEventListener("touchmove", this.onScrollLock, { capture: true, passive: false });
     for (const t of CONTAINED) window.addEventListener(t, this.onEventMaster, true);
   }
 
@@ -966,6 +942,8 @@ export class LoupeOverlay {
     window.removeEventListener("pointerdown", this.onOverlayPointerStartMaster, true);
     window.removeEventListener("touchstart", this.onOverlayPointerStartMaster, true);
     window.removeEventListener("click", this.onOverlayClickMaster, true);
+    window.removeEventListener("wheel", this.onScrollLock, true);
+    window.removeEventListener("touchmove", this.onScrollLock, true);
     window.removeEventListener("pointermove", this.onMouseMove, true);
     window.removeEventListener("pointerup", this.onMouseUp, true);
     window.removeEventListener("mousemove", this.onMouseMove, true);
@@ -973,6 +951,16 @@ export class LoupeOverlay {
     window.removeEventListener("click", this.onSuppressClick, true);
     for (const t of CONTAINED) window.removeEventListener(t, this.onEventMaster, true);
   }
+
+  // The marquee and preview panel are positioned in viewport coordinates, so
+  // scrolling the page while a region is being dragged or previewed would
+  // detach them from the captured element. Lock page scroll during those
+  // phases, but let the overlay's own panel scroll (e.g. an overflowing note).
+  private onScrollLock = (e: Event): void => {
+    if (this.phase !== "dragging" && this.phase !== "editing") return;
+    if (this.eventInOverlay(e)) return;
+    if (e.cancelable) e.preventDefault();
+  };
 
   /** True when the event was dispatched to something inside our overlay. */
   private eventInOverlay(e: Event): boolean {
@@ -1055,9 +1043,24 @@ export class LoupeOverlay {
     doc.body.style.setProperty("background", "transparent", "important");
     doc.defaultView?.addEventListener("keydown", this.onFrameKeyDown, true);
     doc.defaultView?.addEventListener("paste", this.onFramePaste, true);
+    // The editor iframe covers the whole viewport, so wheel/touch scrolls over
+    // its transparent areas would otherwise chain through to the page and drag
+    // the marquee out of alignment. Lock them here; the panel scrolls its own
+    // overflow via overscroll-behavior:contain (see handlePanelRef).
+    doc.defaultView?.addEventListener("wheel", this.onFrameScrollLock, { capture: true, passive: false });
+    doc.defaultView?.addEventListener("touchmove", this.onFrameScrollLock, { capture: true, passive: false });
     this.editingDocument = doc;
     return doc;
   }
+
+  private onFrameScrollLock = (e: Event): void => {
+    const panel = this.editPanelEl;
+    const target = e.target as Node | null;
+    const overScrollablePanel =
+      !!panel && !!target && panel.contains(target) && panel.scrollHeight > panel.clientHeight;
+    if (overScrollablePanel) return;
+    if (e.cancelable) e.preventDefault();
+  };
 
   private onFrameKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== "Escape" || !this.active) return;

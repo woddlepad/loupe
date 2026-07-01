@@ -315,7 +315,7 @@ export function moveAnnotationToGroup(repoRoot: string, id: string, group: strin
 export function updateAnnotation(
   repoRoot: string,
   id: string,
-  patch: { note?: string; status?: AnnotationStatus },
+  patch: { note?: string; status?: AnnotationStatus; label?: string },
 ): boolean {
   const absDir = findBundleDir(repoRoot, id);
   if (!absDir) return false;
@@ -325,6 +325,7 @@ export function updateAnnotation(
     ...meta,
     ...(patch.note !== undefined ? { note: patch.note } : {}),
     ...(patch.status ? { status: patch.status } : {}),
+    ...(patch.label !== undefined ? { label: patch.label.trim() || undefined } : {}),
   };
   writeMeta(absDir, updated);
   rewriteNoteFile(absDir, updated);
@@ -452,7 +453,6 @@ function rewriteNoteFile(absDir: string, a: Annotation & { resolution?: SourceRe
   const r = a.resolution ?? { candidates: [], method: "none" as const };
   const chain = a.target.componentChain.map((c) => c.name).join(" › ") || "(no React component found)";
   const slot = a.target.dataAttributes["data-slot"];
-  const suggestions = a.acceptedSuggestions.map((s) => `- **${s.label}** - ${s.detail}`).join("\n");
   const candidates = r.candidates.length
     ? r.candidates.map((c) => `- \`${c}\``).join("\n")
     : "- _(unresolved - use the component name + selector + screenshot)_";
@@ -464,7 +464,8 @@ function rewriteNoteFile(absDir: string, a: Annotation & { resolution?: SourceRe
   writeFileSync(
     join(absDir, "note.md"),
     [
-      `# Annotation ${a.id}`,
+      `# ${a.label?.trim() || `Annotation ${a.id}`}`,
+      a.label?.trim() ? `\n_Annotation ${a.id}_` : "",
       "",
       existsSync(join(absDir, "shot.png")) ? "![screenshot](./shot.png)" : "_(no screenshot)_",
       "",
@@ -481,7 +482,6 @@ function rewriteNoteFile(absDir: string, a: Annotation & { resolution?: SourceRe
       "## Note",
       a.note || "_(no free-form note)_",
       refImgs ? "\n## Reference images\n" + refImgs : "",
-      suggestions ? "\n## Suggested fixes\n" + suggestions : "",
       "",
     ]
       .filter((line) => line !== undefined)
