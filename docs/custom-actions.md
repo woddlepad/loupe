@@ -76,7 +76,6 @@ Useful files in `bundle.absDir`:
 - `shot.png`
 - `note.md`
 - `meta.json`
-- `comments.jsonl`
 - `refs/*`
 
 The bundle is already written before your action runs. Agent actions, custom
@@ -90,7 +89,9 @@ Use `.loupe/config.json` for repo-local config:
 {
   "agents": {
     "claude": { "mode": "spawn", "argv": ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] },
-    "codex": { "mode": "codex-app" }
+    "codex": { "mode": "spawn", "argv": ["codex", "exec", "{loupeCommand}"] },
+    "copilot": { "mode": "spawn", "argv": ["copilot", "--allow-all-tools", "-p", "{prompt}"] },
+    "pi": { "mode": "spawn", "argv": ["pi", "-p", "{atImages}", "{prompt}"] }
   },
   "integrations": {
     "linear": { "apiKey": "lin_api_...", "teamId": "..." }
@@ -107,11 +108,14 @@ Custom actions can read `ctx.config.custom` for this data.
 
 Built-in agent modes:
 
-- `spawn` runs `argv` on the bridge machine. Supported placeholders are
-  `{prompt}`, `{imageArgs}`, `{bundleDir}`, `{screenshot}`, `{source}`,
-  `{loupeCommand}`, `{codexUrl}`, and `{repoRoot}`.
+- `spawn` runs `argv` on the bridge machine, and is only advertised when
+  `argv[0]` is found on `PATH` (so uninstalled agents are hidden). Supported
+  placeholders are `{prompt}`, `{imageArgs}` (→ `-i shot.png,ref.png` for Codex),
+  `{atImages}` (→ `@shot.png @ref.png` for Pi), `{bundleDir}`, `{screenshot}`,
+  `{source}`, `{loupeCommand}`, `{codexUrl}`, and `{repoRoot}`.
 - `codex-app` opens a Codex Desktop thread with `/loupe <id-or-group>` and the
-  repo path prefilled.
+  repo path prefilled. You can choose this from the extension settings when you
+  prefer URL-handler handoff.
 - `codex-app-server` creates a Codex thread through the Codex app-server daemon
   on the bridge machine. Use it for remote bridges when your local Codex app is
   connected to that host over SSH. Set `LOUPE_CODEX_APP_SERVER=1` for the default

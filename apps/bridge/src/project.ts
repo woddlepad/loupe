@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { ensureRecordingsGitignored } from "./bundle.js";
 
 export interface LoupeProjectConfig {
   name: string;
@@ -185,6 +186,7 @@ function writeRepoConfig(repoRoot: string, project: RegisteredProject): string {
     ...(project.framework ? { framework: project.framework } : {}),
   };
   writeJson(configPath, { ...existing, project: nextProject });
+  ensureRecordingsGitignored(repoRoot);
   return configPath;
 }
 

@@ -4,10 +4,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import type { Annotation } from "@loupe/core/model";
-import { writeBundle, writeReference } from "./bundle.js";
+import { writeBundle, writeRecordingBundle, writeReference } from "./bundle.js";
 import {
   addAnnotationReference,
-  appendComment,
   createGroup,
   deleteGroup,
   deleteReference,
@@ -21,6 +20,8 @@ import {
   renameGroup,
   reorderGroups,
   referenceImageDataUrl,
+  resolveGroup,
+  setAnnotationStatus,
   updateAnnotation,
 } from "./store.js";
 
@@ -66,6 +67,38 @@ test("updates saved annotation notes and appends references", () => {
   assert.match(note, /refs\/ref-1\.png/);
 });
 
+test("writes recording events and extracted keyframes", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-recording-"));
+  const capture: Annotation = {
+    ...annotation("rec-1", "recorded flow"),
+    kind: "recording",
+    recording: {
+      startedAt: "2026-06-22T00:00:00.000Z",
+      durationMs: 1200,
+      console: [],
+      network: [{ kind: "fetch", method: "GET", url: "http://localhost:3000/api", status: 500, ok: false, durationMs: 42, t: 700 }],
+      errors: [],
+      events: [{ kind: "click", t: 500, label: "click button Save", x: 20, y: 30, selector: "button", text: "Save" }],
+      keyframes: [{ t: 720, eventT: 500, label: "after click button Save", dataUrl: PNG_DATA_URL }],
+    },
+  };
+
+  const bundle = writeRecordingBundle(repo, capture, { candidates: [], method: "none" });
+  const keyframe = resolve(repo, bundle.dir, "keyframes/frame-001.png");
+
+  assert.equal(existsSync(keyframe), true);
+  assert.equal(readFileSync(resolve(repo, bundle.dir, "events.jsonl"), "utf8").includes("click button Save"), true);
+
+  const meta = JSON.parse(readFileSync(resolve(repo, bundle.dir, "meta.json"), "utf8")) as {
+    recording: { counts: { events: number; keyframes: number; failedRequests: number }; keyframes: { file: string; dataUrl?: string }[] };
+  };
+  assert.equal(meta.recording.counts.events, 1);
+  assert.equal(meta.recording.counts.keyframes, 1);
+  assert.equal(meta.recording.counts.failedRequests, 1);
+  assert.equal(meta.recording.keyframes[0]?.file, "keyframes/frame-001.png");
+  assert.equal("dataUrl" in meta.recording.keyframes[0]!, false);
+});
+
 test("lists references by capture date, resolves images, and deletes library items", () => {
   const repo = mkdtempSync(join(tmpdir(), "loupe-references-"));
   writeReference(repo, { ...annotation("old-ref"), createdAt: "2026-06-21T00:00:00.000Z" });
@@ -94,31 +127,36 @@ test("deletes all resolved annotations", () => {
   assert.deepEqual(listAnnotations(repo).map((a) => a.id), ["open-1"]);
 });
 
-test("agent completion comments move annotations to needs review, not resolved", () => {
+test("agent completion moves annotations to needs review, not resolved", () => {
   const repo = mkdtempSync(join(tmpdir(), "loupe-agent-review-"));
   writeBundle(repo, annotation("ann-1"), { candidates: [], method: "none" });
 
-  assert.equal(appendComment(repo, "ann-1", {
-    author: "agent:codex",
-    body: "implemented",
-    createdAt: "2026-06-22T00:01:00.000Z",
-    status: "resolved",
-  }), true);
-
+  // An agent trying to resolve is redirected to needs_review.
+  assert.equal(setAnnotationStatus(repo, "ann-1", "resolved", "agent:codex"), true);
   let [stored] = listAnnotations(repo);
   assert.equal(stored?.status, "needs_review");
-  assert.equal(stored?.comments?.[0]?.status, "needs_review");
 
-  assert.equal(appendComment(repo, "ann-1", {
-    author: "Dani",
-    body: "looks good",
-    createdAt: "2026-06-22T00:02:00.000Z",
-    status: "resolved",
-  }), true);
-
+  // A human can resolve directly.
+  assert.equal(setAnnotationStatus(repo, "ann-1", "resolved", "Dani"), true);
   [stored] = listAnnotations(repo);
   assert.equal(stored?.status, "resolved");
-  assert.equal(stored?.comments?.[1]?.status, "resolved");
+
+  assert.equal(setAnnotationStatus(repo, "missing", "resolved"), false);
+});
+
+test("resolveGroup resolves every open annotation in a group", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-resolve-group-"));
+  writeBundle(repo, { ...annotation("g-open-1"), status: "open" }, { candidates: [], method: "none" });
+  writeBundle(repo, { ...annotation("g-open-2"), status: "needs_review" }, { candidates: [], method: "none" });
+  writeBundle(repo, { ...annotation("g-done"), status: "resolved" }, { candidates: [], method: "none" });
+
+  assert.equal(resolveGroup(repo, "notes"), 2);
+  assert.deepEqual(
+    listAnnotations(repo).every((a) => a.status === "resolved"),
+    true,
+  );
+  // Re-running finds nothing left to resolve.
+  assert.equal(resolveGroup(repo, "notes"), 0);
 });
 
 test("deletes a group and removes it from ordering", () => {

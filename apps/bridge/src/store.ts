@@ -1,9 +1,10 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { Annotation, AnnotationComment, AnnotationReference, AnnotationStatus } from "@loupe/core/model";
+import type { Annotation, AnnotationReference, AnnotationStatus } from "@loupe/core/model";
 import type { SourceResolution } from "./resolve/index.js";
 
 const ROOT = ".loupe/annotations";
+const RECORDINGS_ROOT = ".loupe/recordings";
 const GROUP_META = ".group.json";
 const GROUP_ORDER = ".order.json";
 
@@ -113,9 +114,28 @@ export function listAnnotations(repoRoot: string): StoredAnnotation[] {
       if (!meta) continue;
       out.push({
         ...meta,
-        comments: readComments(absDir),
         groupSlug: slug,
         dir: join(ROOT, slug, bundle),
+      });
+    }
+  }
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/** Walk `.loupe/recordings/<group>/<id>/` and read every flow recording bundle. */
+export function listRecordings(repoRoot: string): StoredAnnotation[] {
+  const root = resolve(repoRoot, RECORDINGS_ROOT);
+  const out: StoredAnnotation[] = [];
+  for (const slug of safeReaddir(root)) {
+    const groupDir = join(root, slug);
+    for (const bundle of safeReaddir(groupDir)) {
+      const absDir = join(groupDir, bundle);
+      const meta = readMeta(absDir);
+      if (!meta) continue;
+      out.push({
+        ...meta,
+        groupSlug: slug,
+        dir: join(RECORDINGS_ROOT, slug, bundle),
       });
     }
   }
@@ -180,14 +200,16 @@ export function reorderGroups(repoRoot: string, slugs: string[]): string[] {
   return next;
 }
 
-/** Find a bundle's absolute dir by annotation id (scans groups). */
+/** Find a bundle's absolute dir by annotation id (scans annotations + recordings). */
 export function findBundleDir(repoRoot: string, id: string): string | undefined {
-  const root = resolve(repoRoot, ROOT);
-  for (const slug of safeReaddir(root)) {
-    const groupDir = join(root, slug);
-    for (const bundle of safeReaddir(groupDir)) {
-      const absDir = join(groupDir, bundle);
-      if (readMeta(absDir)?.id === id) return absDir;
+  for (const base of [ROOT, RECORDINGS_ROOT]) {
+    const root = resolve(repoRoot, base);
+    for (const slug of safeReaddir(root)) {
+      const groupDir = join(root, slug);
+      for (const bundle of safeReaddir(groupDir)) {
+        const absDir = join(groupDir, bundle);
+        if (readMeta(absDir)?.id === id) return absDir;
+      }
     }
   }
   return undefined;
@@ -326,42 +348,27 @@ export function addAnnotationReference(
 }
 
 /**
- * Append a comment to an annotation's `comments.jsonl` and, if the comment
- * carries a status, update the annotation's meta. Agent-authored completions
- * always land in review instead of resolving the annotation on their own.
+ * Advance an annotation's lifecycle status. Agent-authored completions always
+ * land in review instead of resolving the annotation on their own.
  */
-export function appendComment(repoRoot: string, id: string, comment: AnnotationComment): boolean {
-  const absDir = findBundleDir(repoRoot, id);
-  if (!absDir) return false;
-  const entry = normalizeAgentComment(comment);
-  appendFileSync(join(absDir, "comments.jsonl"), JSON.stringify(entry) + "\n");
-  if (entry.status) setStatus(absDir, entry.status);
-  return true;
+export function setAnnotationStatus(
+  repoRoot: string,
+  id: string,
+  status: AnnotationStatus,
+  author?: string,
+): boolean {
+  const next = status === "resolved" && author?.trim().toLowerCase().startsWith("agent:") ? "needs_review" : status;
+  return updateAnnotation(repoRoot, id, { status: next });
 }
 
-function normalizeAgentComment(comment: AnnotationComment): AnnotationComment {
-  if (comment.status !== "resolved") return comment;
-  if (!comment.author.trim().toLowerCase().startsWith("agent:")) return comment;
-  return { ...comment, status: "needs_review" };
-}
-
-function setStatus(absDir: string, status: AnnotationStatus): void {
-  const meta = readMetaWithResolution(absDir);
-  if (!meta) return;
-  const updated = { ...meta, status };
-  writeMeta(absDir, updated);
-  rewriteNoteFile(absDir, updated);
-}
-
-export function readComments(absDir: string): AnnotationComment[] {
-  const file = join(absDir, "comments.jsonl");
-  if (!existsSync(file)) return [];
-  return readFileSync(file, "utf8")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => safeParse(l))
-    .filter((c): c is AnnotationComment => c !== null);
+/** Mark every unresolved annotation in a group as resolved. Returns the count. */
+export function resolveGroup(repoRoot: string, slug: string): number {
+  let count = 0;
+  for (const a of listAnnotations(repoRoot)) {
+    if (a.groupSlug !== slug || a.status === "resolved") continue;
+    if (updateAnnotation(repoRoot, a.id, { status: "resolved" })) count++;
+  }
+  return count;
 }
 
 function readMeta(absDir: string): Annotation | undefined {
@@ -415,8 +422,7 @@ function removeGroupFromOrder(root: string, slug: string): void {
 }
 
 function writeMeta(absDir: string, meta: Annotation & { resolution?: SourceResolution }): void {
-  const { comments: _comments, ...persisted } = meta;
-  writeFileSync(join(absDir, "meta.json"), JSON.stringify(persisted, null, 2) + "\n");
+  writeFileSync(join(absDir, "meta.json"), JSON.stringify(meta, null, 2) + "\n");
 }
 
 function appendReferenceFile(
@@ -513,12 +519,4 @@ function uniqueBundleDir(parent: string, bundle: string): string {
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
-}
-
-function safeParse(line: string): AnnotationComment | null {
-  try {
-    return JSON.parse(line) as AnnotationComment;
-  } catch {
-    return null;
-  }
 }

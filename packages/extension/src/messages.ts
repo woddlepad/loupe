@@ -1,9 +1,9 @@
 import type {
   ActionDescriptor,
   Annotation,
+  AnnotationStatus,
   AnnotationTarget,
   AnnotatePayload,
-  AnnotationComment,
   Rect,
 } from "@loupe/core/model";
 
@@ -16,11 +16,11 @@ export type LoupeMessage =
   | { type: "actions" }
   | { type: "groups" }
   | { type: "list" }
+  | { type: "recordings" }
   | { type: "capture"; rect: Rect; devicePixelRatio: number }
   | { type: "annotate"; payload: AnnotatePayload }
-  | { type: "update-annotation"; id: string; patch: { note?: string } }
+  | { type: "update-annotation"; id: string; patch: { note?: string; status?: AnnotationStatus } }
   | { type: "add-reference"; id: string; reference: { caption?: string; dataUrl: string } }
-  | { type: "comment"; id: string; comment: AnnotationComment }
   | { type: "delete-annotation"; id: string }
   | { type: "delete-resolved" }
   | { type: "create-group"; group: string }
@@ -29,12 +29,18 @@ export type LoupeMessage =
   | { type: "move-annotation"; id: string; group: string }
   | { type: "reorder-groups"; slugs: string[] }
   | { type: "group-run"; slug: string; action: string }
+  | { type: "resolve-group"; slug: string }
+  | { type: "annotation-run"; id: string; action: string }
   | { type: "resolve-target"; target: AnnotationTarget }
   | { type: "references" }
   | { type: "reference-image"; id: string }
   | { type: "delete-reference"; id: string }
   | { type: "delete-reference-page"; url: string }
-  | { type: "save-reference"; annotation: Annotation };
+  | { type: "save-reference"; annotation: Annotation }
+  | { type: "start-recording" }
+  | { type: "stop-recording" }
+  | { type: "cancel-recording" }
+  | { type: "record"; payload: AnnotatePayload };
 
 export interface ReferenceItem {
   id: string;
@@ -52,7 +58,7 @@ export interface GroupSummary {
   open: number;
 }
 
-/** An annotation as stored on disk (adds dir + groupSlug + comments). */
+/** An annotation as stored on disk (adds dir + groupSlug). */
 export interface StoredAnnotation extends Annotation {
   dir: string;
   groupSlug: string;
@@ -65,6 +71,9 @@ export type GroupsResult = { ok: true; groups: GroupSummary[] } | { ok: false; e
 export type ListResult =
   | { ok: true; annotations: StoredAnnotation[] }
   | { ok: false; error: string };
+export type RecordingsResult =
+  | { ok: true; recordings: StoredAnnotation[] }
+  | { ok: false; error: string };
 export type ReferencesResult =
   | { ok: true; references: ReferenceItem[] }
   | { ok: false; error: string };
@@ -73,6 +82,9 @@ export type ReferenceImageResult =
   | { ok: false; error: string };
 export type SimpleResult = { ok: true; detail?: string } | { ok: false; error: string };
 export type CaptureResult = { ok: true; dataUrl: string } | { ok: false; error: string };
+export type RecordingResult =
+  | { ok: true; videoDataUrl?: string; durationMs: number; startedAt: string }
+  | { ok: false; error: string };
 export type ResolveResult =
   | { ok: true; source: string | null; candidates: string[]; method: string }
   | { ok: false; error: string };

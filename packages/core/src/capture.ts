@@ -134,5 +134,6 @@ export function captureTarget(el: Element): AnnotationTarget {
     dataAttributes: dataAttributes(el),
     className: typeof el.className === "string" ? el.className : "",
     componentChain: componentChainFor(el),
+    elementRect: rectOf(el),
   };
 }

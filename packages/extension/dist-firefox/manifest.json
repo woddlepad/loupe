@@ -6,8 +6,10 @@
   "permissions": [
     "activeTab",
     "clipboardWrite",
+    "offscreen",
     "scripting",
     "storage",
+    "tabCapture",
     "tabs"
   ],
   "background": {
@@ -48,6 +50,16 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "fonts/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "loupe@woddlepad.com",

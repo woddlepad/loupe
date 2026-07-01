@@ -28,7 +28,7 @@ No more "screenshot → paste into chat → hope the agent finds the file."
    you, looking at a janky button                    a coding agent, 3 seconds later
             │                                                    ▲
             │ Alt+A, drag a box                                  │ "fixed the padding,
-            ▼                                                    │  see comments.jsonl"
+            ▼                                                    │  marked needs_review"
    ┌─────────────────────┐    POST    ┌──────────────────────┐   │
    │  Loupe overlay      │ ─────────▶ │  bridge daemon       │ ──┘
    │  • which component? │            │  • writes .loupe/…   │
@@ -93,8 +93,19 @@ Pick an action after capture:
 - **Save to repo** writes the annotation bundle under `.loupe/`.
 - **Claude** saves the bundle, then launches Claude Code in the background with
   `claude --permission-mode auto --bg "/loupe <id>"`.
-- **Codex** saves the bundle, then opens a Codex Desktop thread with
-  `/loupe <id>` and the repo path prefilled.
+- **Codex** saves the bundle, then launches Codex in the background with
+  `codex exec "/loupe <id>"`. Switch the extension setting to URL handler if
+  you want a visible Codex Desktop thread instead.
+- **Copilot** saves the bundle, then runs the GitHub Copilot CLI headless with
+  `copilot --allow-all-tools -p "<inline prompt>"` (the standalone `copilot`
+  binary — `npm i -g @github/copilot` — not the deprecated `gh copilot`).
+- **Pi** saves the bundle, then runs the Pi coding agent with
+  `pi -p @shot.png "<inline prompt>"`, attaching the screenshot for vision
+  (`npm i -g --ignore-scripts @earendil-works/pi-coding-agent`).
+
+The bridge only advertises providers whose CLI is installed, so uninstalled
+agents never appear. You can also hide installed providers per-browser from the
+extension options page (**Providers**).
 
 Pick up and implement annotations from any coding agent:
 
@@ -122,7 +133,7 @@ Use $loupe to implement dde8f08a
 When an agent finishes, it should move each annotation to review:
 
 ```sh
-loupe comment dde8f08a --status needs_review --author agent:codex --body "Implemented: aligned shortcut keys. Checks: pnpm test."
+loupe status dde8f08a --status needs_review --author agent:codex
 ```
 
 ## Why
@@ -136,21 +147,23 @@ vague vibe.
 
 ## Features
 
-- 🎯 **Component-aware selection** — drag a box; Loupe walks the React fiber tree
-  to name the component (`TaskCard › Button`), the same way React DevTools does.
-  Framework-agnostic core, great React support today.
+- 🎯 **Component-aware selection** — drag a box; Loupe walks the framework's
+  component tree to name the component (`TaskCard › Button`), the same way the
+  framework devtools do. First-class **React** and **Vue / Vuetify** support
+  today, with a framework-agnostic fallback for everything else — see the
+  [framework support matrix](./docs/framework-support.md).
 - 🤖 **Hand it to Claude or Codex** — one click routes the screenshot, note, and
   resolved source to **Claude Code** (`claude --permission-mode auto --bg "/loupe <id>"`) or
-  **Codex** (`codex://new?prompt=/loupe...`). Codex opens a visible app thread
-  by default; set `LOUPE_CODEX_CLOUD_ENV` to submit phone-visible Codex Cloud
-  tasks instead.
+  **Codex** (`codex exec "/loupe <id>"`). Codex runs in the background by
+  default; set `LOUPE_CODEX_CLOUD_ENV` to submit phone-visible Codex Cloud tasks,
+  or switch the extension setting to URL handler for a visible app thread.
 - 🧩 **Pluggable actions** — `save`, agents, a built-in **Linear** integration,
   and drop-in `.loupe/actions/*.mjs` custom actions ("send it to *my* tracker").
 - 🗂️ **Groups** — batch annotations (e.g. *notes UI refactor*) and dispatch the
   whole set to one agent session, no cross-contamination.
-- 💬 **Comment threads** — annotations are files, so the agent comments back
-  ("implemented, needs review") and you see it in the overlay. You can comment
-  feedback or resolve the item yourself.
+- ✅ **Review workflow** — annotations are files with a lifecycle status. The
+  agent moves each one to *needs review* when it's implemented, and you resolve
+  (or reopen) it from the overlay.
 - 🖼️ **Reference images** — paste a screenshot (e.g. from Notion) to say "make it
   look like *this*."
 - 🌐 **Cross-site references** — annotate *any* site. On a non-project origin
@@ -171,7 +184,7 @@ Three small pieces, clean responsibilities:
 
 | Piece | What it is | Where |
 | --- | --- | --- |
-| **`@loupe/core`** | framework-agnostic overlay: selection, React fiber identification, style-heuristic suggestions, the data model | `packages/core` |
+| **`@loupe/core`** | framework-agnostic overlay: selection, React/Vue component identification, style-heuristic suggestions, the data model | `packages/core` |
 | **`@loupe/extension`** | the MV3 Chrome extension — the *generic* shell that runs on any page, captures true-pixel screenshots, and talks to the daemon | `packages/extension` |
 | **`@loupe/bridge`** | a tiny local daemon you run **inside your repo** — resolves components to files, writes the bundle, runs actions | `apps/bridge` |
 
@@ -198,9 +211,8 @@ pnpm install:skill            # → ~/.codex/skills/loupe and ~/.claude/commands
    loupe bridge
    ```
 3. **Open your app**, press **`Alt+A`**, drag a region, write a note, pick an
-   action. Press **`Alt+Shift+A`** to view annotations + comments. You can
-   change or clear both shortcuts from Loupe settings via Chrome's extension
-   shortcut editor.
+   action. Press **`Alt+Shift+A`** to view annotations. You can change or clear
+   both shortcuts from Loupe settings via Chrome's extension shortcut editor.
 
 ## The annotation bundle
 
@@ -213,8 +225,7 @@ Everything is written into your repo under `.loupe/`, meant to be committed:
       2026-06-21-a1b2/
         shot.png                      # cropped screenshot
         note.md                       # human + agent readable
-        meta.json                     # component, source, rect, suggestions
-        comments.jsonl                # append-only thread (agent closes the loop)
+        meta.json                     # component, source, rect, status, suggestions
         refs/ref-1.png                # reference images
   references/                         # cross-site captures (e.g. Notion)
 ```
@@ -228,7 +239,7 @@ loupe bridge [--repo <path>] [--port 7337] [--host 127.0.0.1]
 loupe init [--repo <path>] [--name <name>] [--origin <host[:port]>] [--port <port>]
 loupe list [--repo <path>] [--json]
 loupe show <group|annotation_id> [--repo <path>] [--json]
-loupe comment <annotation_id> --body "Implemented..." --status needs_review [--repo <path>]
+loupe status <annotation_id> --status needs_review [--author agent:codex] [--repo <path>]
 ```
 
 Run `loupe init` from a project root to auto-map the repo. It merges
@@ -269,7 +280,9 @@ The note panel renders one button per action the daemon advertises. Configure in
 {
   "agents": {
     "claude": { "mode": "spawn", "argv": ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] },
-    "codex": { "mode": "codex-app" }
+    "codex": { "mode": "spawn", "argv": ["codex", "exec", "{loupeCommand}"] },
+    "copilot": { "mode": "spawn", "argv": ["copilot", "--allow-all-tools", "-p", "{prompt}"] },
+    "pi": { "mode": "spawn", "argv": ["pi", "-p", "{atImages}", "{prompt}"] }
   },
   "integrations": {
     "linear": { "apiKey": "lin_api_…", "teamId": "…" }
@@ -279,13 +292,15 @@ The note panel renders one button per action the daemon advertises. Configure in
 
 Agents run in one of four modes:
 
-- **`spawn`** — launch a fresh detached process from `argv`. Placeholders:
-  `{prompt}`, `{imageArgs}` (→ `-i shot.png,ref.png` for Codex), `{bundleDir}`,
+- **`spawn`** — launch a fresh detached process from `argv`, advertised only
+  when `argv[0]` is on `PATH`. Placeholders:
+  `{prompt}`, `{imageArgs}` (→ `-i shot.png,ref.png` for Codex),
+  `{atImages}` (→ `@shot.png @ref.png` for Pi), `{bundleDir}`,
   `{screenshot}`, `{loupeCommand}` (→ `/loupe <id-or-group>`), `{codexUrl}`,
   and `{repoRoot}`.
 - **`codex-app`** — open a visible Codex Desktop thread with `/loupe <id-or-group>`
-  and the repo path prefilled. Codex uses this by default when
-  `LOUPE_CODEX_CLOUD_ENV` is not set.
+  and the repo path prefilled. You can choose this from the extension settings
+  when you prefer URL-handler handoff.
 - **`codex-app-server`** — create a visible Codex Desktop thread through the
   Codex app-server daemon on the bridge machine. Use this for remote bridges
   where your local Codex app is connected to the target host over SSH.

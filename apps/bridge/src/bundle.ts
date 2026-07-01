@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Annotation } from "@loupe/core/model";
+import type { Annotation, NetworkEntry, RecordingCapture, RecordingKeyframe } from "@loupe/core/model";
 import type { SourceResolution } from "./resolve/index.js";
 import { groupSlug } from "./store.js";
 
@@ -14,6 +14,8 @@ export interface WrittenBundle {
   screenshot?: string;
   /** Absolute paths to reference images (refs/), if any. */
   references: string[];
+  /** Absolute paths to recording keyframes, if any. */
+  keyframes: string[];
 }
 
 /**
@@ -30,9 +32,6 @@ export function writeBundle(
   const dir = join(".loupe", "annotations", groupSlug(annotation.group), bundleSlug(annotation));
   const absDir = resolve(repoRoot, dir);
   mkdirSync(absDir, { recursive: true });
-
-  // Touch an append-only comment log so agents/teammates can write follow-ups.
-  if (!existsSync(join(absDir, "comments.jsonl"))) writeFileSync(join(absDir, "comments.jsonl"), "");
 
   let screenshot: string | undefined;
   if (annotation.screenshotDataUrl) {
@@ -65,13 +64,201 @@ export function writeBundle(
     renderNote(annotation, resolution, Boolean(screenshot), persistedRefs),
   );
 
-  return { id: annotation.id, dir, absDir, screenshot, references };
+  return { id: annotation.id, dir, absDir, screenshot, references, keyframes: [] };
 }
 
 function bundleSlug(a: Annotation): string {
   const date = (a.createdAt || new Date().toISOString()).slice(0, 10);
   const id = a.id.replace(/[^a-z0-9]/gi, "").slice(0, 8) || "anon";
   return `${date}-${id}`;
+}
+
+/**
+ * Write a flow recording into `.loupe/recordings/<group>/<id>/` as committable
+ * files: `recording.webm`, `console.log`, `network.jsonl`, `errors.jsonl`,
+ * `note.md`, and `meta.json`. The heavy video + telemetry live in their own
+ * files; `meta.json` keeps only compact counts and file pointers so it stays
+ * cheap for an agent to read.
+ */
+export function writeRecordingBundle(
+  repoRoot: string,
+  annotation: Annotation,
+  resolution: SourceResolution,
+): WrittenBundle {
+  // Recordings are local-only by default (large video binaries).
+  ensureRecordingsGitignored(repoRoot);
+
+  const dir = join(".loupe", "recordings", groupSlug(annotation.group), bundleSlug(annotation));
+  const absDir = resolve(repoRoot, dir);
+  mkdirSync(absDir, { recursive: true });
+
+  const rec = annotation.recording;
+
+  let video: string | undefined;
+  if (rec?.videoDataUrl) {
+    const buffer = decodeVideo(rec.videoDataUrl);
+    if (buffer) {
+      video = "recording.webm";
+      writeFileSync(join(absDir, video), buffer);
+    }
+  }
+
+  const consoleLines = (rec?.console ?? []).map((c) => `[${formatTime(c.t)}] ${c.level.toUpperCase()} ${c.text}`);
+  writeFileSync(join(absDir, "console.log"), joinLines(consoleLines));
+  writeFileSync(join(absDir, "network.jsonl"), joinLines((rec?.network ?? []).map((n) => JSON.stringify(n))));
+  writeFileSync(join(absDir, "errors.jsonl"), joinLines((rec?.errors ?? []).map((e) => JSON.stringify(e))));
+  writeFileSync(join(absDir, "events.jsonl"), joinLines((rec?.events ?? []).map((e) => JSON.stringify(e))));
+
+  const keyframes: string[] = [];
+  const persistedKeyframes = (rec?.keyframes ?? []).map((frame, i) => {
+    const persisted = persistRecordingKeyframe(absDir, frame, i + 1);
+    if (persisted.absPath) keyframes.push(persisted.absPath);
+    return persisted.meta;
+  });
+
+  const recordingMeta = rec
+    ? {
+        startedAt: rec.startedAt,
+        durationMs: rec.durationMs,
+        video: video ?? null,
+        counts: {
+          console: rec.console.length,
+          network: rec.network.length,
+          errors: rec.errors.length,
+          failedRequests: rec.network.filter(isFailedRequest).length,
+          events: rec.events?.length ?? 0,
+          keyframes: persistedKeyframes.length,
+        },
+        files: {
+          console: "console.log",
+          network: "network.jsonl",
+          errors: "errors.jsonl",
+          events: "events.jsonl",
+          keyframes: persistedKeyframes.map((frame) => frame.file).filter(Boolean),
+        },
+        keyframes: persistedKeyframes,
+      }
+    : undefined;
+
+  const { screenshotDataUrl: _shot, recording: _rec, ...rest } = annotation;
+  const meta = { ...rest, recording: recordingMeta, resolution };
+  writeFileSync(join(absDir, "meta.json"), JSON.stringify(meta, null, 2) + "\n");
+  writeFileSync(join(absDir, "note.md"), renderRecordingNote(annotation, rec, video, persistedKeyframes));
+
+  return { id: annotation.id, dir, absDir, references: [], keyframes };
+}
+
+function renderRecordingNote(
+  a: Annotation,
+  rec: RecordingCapture | undefined,
+  video: string | undefined,
+  persistedKeyframes: RecordingKeyframe[],
+): string {
+  const failed = (rec?.network ?? []).filter(isFailedRequest);
+  const errors = rec?.errors ?? [];
+  const keyframes = persistedKeyframes.filter((frame) => frame.file);
+  return [
+    `# Flow recording ${a.id}`,
+    "",
+    video ? `🎥 [recording.webm](./${video}) · ${formatDuration(rec?.durationMs ?? 0)}` : "_(no video captured)_",
+    "",
+    `**Page:** ${a.title} — ${a.url}`,
+    a.group ? `**Group:** ${a.group}` : "",
+    rec
+      ? `**Captured:** ${rec.console.length} console · ${rec.network.length} requests · ${errors.length} errors · ${failed.length} failed requests · ${rec.events?.length ?? 0} events · ${keyframes.length} keyframes`
+      : "",
+    "",
+    "## Requested change",
+    a.note || "_(no free-form note)_",
+    "",
+    keyframes.length
+      ? "## Keyframes\n" +
+        keyframes
+          .map((frame, i) => {
+            const file = frame.file ?? `keyframes/frame-${String(i + 1).padStart(3, "0")}.png`;
+            return `- \`${formatTime(frame.t)}\` ${frame.label} — ![${frame.label}](./${file})`;
+          })
+          .join("\n") +
+        "\n"
+      : "",
+    "## Captured logs",
+    "- console: [`console.log`](./console.log)",
+    "- network: [`network.jsonl`](./network.jsonl)",
+    "- errors: [`errors.jsonl`](./errors.jsonl)",
+    "- events: [`events.jsonl`](./events.jsonl)",
+    errors.length
+      ? "\n## Errors during the flow\n" +
+        errors.map((e) => `- \`${formatTime(e.t)}\` **${e.kind}**: ${e.message}`).join("\n")
+      : "",
+    failed.length
+      ? "\n## Failed requests\n" +
+        failed.map((n) => `- \`${formatTime(n.t)}\` ${n.method} ${n.url} → ${n.error ?? n.status}`).join("\n")
+      : "",
+    "",
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n");
+}
+
+function persistRecordingKeyframe(
+  absDir: string,
+  frame: RecordingKeyframe,
+  index: number,
+): { meta: RecordingKeyframe; absPath?: string } {
+  const { dataUrl: _dataUrl, ...meta } = frame;
+  if (!frame.dataUrl) return { meta };
+  const decoded = decodeImage(frame.dataUrl);
+  if (!decoded) return { meta };
+  mkdirSync(join(absDir, "keyframes"), { recursive: true });
+  const file = `keyframes/frame-${String(index).padStart(3, "0")}.${decoded.ext}`;
+  const absPath = join(absDir, file);
+  writeFileSync(absPath, decoded.buffer);
+  return { meta: { ...meta, file }, absPath };
+}
+
+/**
+ * Ensure `.loupe/.gitignore` excludes `recordings/` so flow recordings (large
+ * webm videos) stay local by default. Idempotent: appends the rule only if no
+ * existing line already ignores the directory. Committed so the rule travels
+ * with the repo for teammates.
+ */
+export function ensureRecordingsGitignored(repoRoot: string): void {
+  const loupeDir = resolve(repoRoot, ".loupe");
+  mkdirSync(loupeDir, { recursive: true });
+  const gitignore = join(loupeDir, ".gitignore");
+  const existing = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : "";
+  const alreadyIgnored = existing
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^\//, "").replace(/\/$/, ""))
+    .some((line) => line === "recordings");
+  if (alreadyIgnored) return;
+  const prefix = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+  writeFileSync(gitignore, `${prefix}# Loupe flow recordings are local by default (large video binaries).\nrecordings/\n`);
+}
+
+function isFailedRequest(n: NetworkEntry): boolean {
+  return Boolean(n.error) || (n.status ?? 0) >= 400;
+}
+
+function joinLines(lines: string[]): string {
+  return lines.length ? lines.join("\n") + "\n" : "";
+}
+
+function formatTime(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function decodeVideo(dataUrl: string): Buffer | null {
+  const m = dataUrl.match(/^data:video\/[a-z0-9.+-]+;base64,(.+)$/i);
+  if (!m) return null;
+  return Buffer.from(m[1]!, "base64");
 }
 
 export interface WrittenReference {

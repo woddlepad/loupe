@@ -9,8 +9,8 @@ The Chrome extension can access the current page when you activate Loupe. When y
 - the selected screenshot region
 - the page URL and title
 - DOM/component hints for the selected element
-- your note, group, comments, and optional reference images
-- extension settings such as bridge URLs, project origins, and your comment display name
+- your note, group, and optional reference images
+- extension settings such as bridge URLs and project origins
 
 ## How Data Is Used
 

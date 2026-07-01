@@ -3,12 +3,11 @@ import { resolve } from "node:path";
 import { cpSync, existsSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AnnotationComment, AnnotationStatus } from "@loupe/core/model";
+import type { AnnotationStatus } from "@loupe/core/model";
 import { createBridge } from "./server.js";
 import { loadConfig } from "./config.js";
-import { gitUserName } from "./git.js";
 import { initProject } from "./project.js";
-import { appendComment, groupSummaries, listAnnotations, type StoredAnnotation } from "./store.js";
+import { groupSummaries, listAnnotations, listRecordings, setAnnotationStatus, type StoredAnnotation } from "./store.js";
 
 const STATUS_VALUES = ["open", "needs_review", "resolved"] as const satisfies readonly AnnotationStatus[];
 
@@ -21,7 +20,7 @@ async function main(): Promise<void> {
   if (cmd === "bridge" || cmd === "start") return bridge(args.slice(1));
   if (cmd === "list" || cmd === "ls") return list(args.slice(1));
   if (cmd === "show") return show(args.slice(1));
-  if (cmd === "comment") return comment(args.slice(1));
+  if (cmd === "status") return status(args.slice(1));
   if (cmd === "install-skill") return installSkill();
 
   throw new Error(`unknown command "${cmd}"`);
@@ -95,6 +94,15 @@ function list(args: string[]): void {
     }
     console.log("");
   }
+
+  const recordings = listRecordings(repo);
+  if (recordings.length > 0) {
+    console.log("Flow recordings");
+    for (const r of recordings) {
+      console.log(`  ${r.id}  ${r.status ?? "open"}  🎥 ${r.note || "(no note)"}`);
+    }
+    console.log("");
+  }
 }
 
 function show(args: string[]): void {
@@ -110,22 +118,15 @@ function show(args: string[]): void {
   console.log(renderContext(repo, target, matches));
 }
 
-function comment(args: string[]): void {
+function status(args: string[]): void {
   const id = args.find((arg) => !arg.startsWith("-"));
-  if (!id) throw new Error("usage: loupe comment <annotation_id> --body <text> [--status open|needs_review|resolved] [--repo <path>]");
-  const body = strFlag(args, "--body");
-  if (!body) throw new Error("missing --body");
-  const status = parseStatus(strFlag(args, "--status"));
+  if (!id) throw new Error("usage: loupe status <annotation_id> --status open|needs_review|resolved [--author agent:codex] [--repo <path>]");
+  const next = parseStatus(strFlag(args, "--status"));
+  if (!next) throw new Error("missing --status");
   const repo = repoRoot(args);
-  const entry: AnnotationComment = {
-    author: strFlag(args, "--author") ?? gitUserName(repo),
-    body,
-    createdAt: new Date().toISOString(),
-    ...(status ? { status } : {}),
-  };
-  const ok = appendComment(repo, id, entry);
+  const ok = setAnnotationStatus(repo, id, next, strFlag(args, "--author"));
   if (!ok) throw new Error(`annotation ${id} not found`);
-  console.log(`commented on ${id}${status ? ` (${status})` : ""}`);
+  console.log(`${id} → ${next}`);
 }
 
 function installSkill(): void {
@@ -164,7 +165,7 @@ function distributionRoot(): string {
 }
 
 function resolveTarget(repo: string, target: string): StoredAnnotation[] {
-  const annotations = listAnnotations(repo);
+  const annotations = [...listAnnotations(repo), ...listRecordings(repo)];
   const groupMatches = annotations.filter((a) => a.groupSlug === target || (a.group ?? "") === target);
   if (groupMatches.length) return groupMatches;
   return annotations.filter((a) => a.id === target || a.id.endsWith(target) || a.dir.includes(target));
@@ -184,7 +185,7 @@ function renderContext(repo: string, target: string, annotations: StoredAnnotati
     "- Use URL, selector, data attributes, visible text, and source hints to find the code.",
     "- If source is unresolved, search using route segments, data-testid values, labels, selected text, and classes.",
     "- Keep changes focused. Run relevant checks.",
-    "- When done, run `loupe comment <id> --status needs_review --body \"Implemented: ... Checks: ...\"` for each implemented annotation.",
+    "- When done, run `loupe status <id> --status needs_review` for each implemented annotation.",
     "",
   ];
   annotations.forEach((a, i) => lines.push(renderAnnotation(repo, a, i + 1), ""));
@@ -192,6 +193,7 @@ function renderContext(repo: string, target: string, annotations: StoredAnnotati
 }
 
 function renderAnnotation(repo: string, a: StoredAnnotation, index: number): string {
+  if (a.kind === "recording") return renderRecording(repo, a, index);
   const dir = resolve(repo, a.dir);
   const target = a.target;
   const meta = a as StoredAnnotation & { resolution?: { primary?: string; candidates?: string[]; method?: string } };
@@ -225,10 +227,56 @@ function renderAnnotation(repo: string, a: StoredAnnotation, index: number): str
       `- reference: \`${resolve(dir, ref)}\``,
       `  ![reference image](${resolve(dir, ref)})`,
     ]),
-    `- comments: \`${resolve(dir, "comments.jsonl")}\``,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+interface RecordingMeta {
+  durationMs?: number;
+  video?: string | null;
+  counts?: { console?: number; network?: number; errors?: number; failedRequests?: number; events?: number; keyframes?: number };
+  keyframes?: { t?: number; label?: string; file?: string }[];
+}
+
+function renderRecording(repo: string, a: StoredAnnotation, index: number): string {
+  const dir = resolve(repo, a.dir);
+  const rec = (a as StoredAnnotation & { recording?: RecordingMeta }).recording;
+  const counts = rec?.counts;
+  return [
+    `## ${index}. Flow recording \`${a.id}\``,
+    "",
+    `- Status: \`${a.status ?? "open"}\``,
+    `- Group: \`${a.group ?? a.groupSlug}\``,
+    `- Bundle: \`${dir}\``,
+    `- Note: ${a.note || "(none)"}`,
+    `- Page: ${a.title || "(untitled)"} - ${a.url}`,
+    rec ? `- Duration: ${formatDuration(rec.durationMs ?? 0)}` : "",
+    counts
+      ? `- Captured: ${counts.console ?? 0} console · ${counts.network ?? 0} requests · ${counts.errors ?? 0} errors · ${counts.failedRequests ?? 0} failed requests · ${counts.events ?? 0} events · ${counts.keyframes ?? 0} keyframes`
+      : "",
+    "- Read the keyframes and logs below to diagnose the flow; the video is for the human reviewer.",
+    rec?.video ? `- video: \`${resolve(dir, rec.video)}\`` : "- video: (none captured)",
+    ...(rec?.keyframes?.length
+      ? rec.keyframes.map((frame, i) => {
+          const file = frame.file ? resolve(dir, frame.file) : resolve(dir, `keyframes/frame-${String(i + 1).padStart(3, "0")}.png`);
+          return `- keyframe ${i + 1} (${formatDuration(frame.t ?? 0)} ${frame.label ?? "interaction"}): \`${file}\`\n  ![recording keyframe ${i + 1}](${file})`;
+        })
+      : ["- keyframes: (none captured)"]),
+    `- events: \`${resolve(dir, "events.jsonl")}\``,
+    `- console: \`${resolve(dir, "console.log")}\``,
+    `- network: \`${resolve(dir, "network.jsonl")}\``,
+    `- errors: \`${resolve(dir, "errors.jsonl")}\``,
+    `- note.md: \`${resolve(dir, "note.md")}\``,
+    `- meta.json: \`${resolve(dir, "meta.json")}\``,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
 }
 
 function componentChain(a: StoredAnnotation): string {
@@ -281,7 +329,7 @@ Usage:
   loupe bridge [--repo <path>] [--port 7337] [--host 127.0.0.1]
   loupe list [--repo <path>] [--json]
   loupe show <group|annotation_id> [--repo <path>] [--json]
-  loupe comment <annotation_id> --body <text> [--status open|needs_review|resolved] [--author agent:codex] [--repo <path>]
+  loupe status <annotation_id> --status open|needs_review|resolved [--author agent:codex] [--repo <path>]
   loupe install-skill
 
 Initialize a project once from its repo root:

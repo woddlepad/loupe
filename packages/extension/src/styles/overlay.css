@@ -1,31 +1,17 @@
 /* Compiled by the build into a string injected into the overlay's shadow root.
- * Tailwind scans the core + extension TS for class names used in the overlays. */
-@import "tailwindcss";
+ * Tailwind scans core + extension + @loupe/ui TS for the classes used here. */
+@import "@loupe/ui/styles/tokens.css";
+@import "@loupe/ui/styles/fonts.css";
 
 @source "../**/*.{ts,tsx,html}";
-@source "../../../core/src/**/*.ts";
-
-/* Loupe tokens: black glassy panels, white controls, and monochrome selection
- * chrome. */
-@theme {
-  --color-loupe-bg: #050505;
-  --color-loupe-panel: #101010;
-  --color-loupe-elev: #1a1a1a;
-  --color-loupe-line: rgba(255, 255, 255, 0.08);
-  --color-loupe-line-strong: rgba(255, 255, 255, 0.14);
-  --color-loupe-fg: #f8f8f8;
-  --color-loupe-muted: #b5b5b5;
-  --color-loupe-faint: #777777;
-  --color-loupe-accent: #f8f8f8;
-  --color-loupe-accent-hover: #d7d7d7;
-  --radius-loupe: 12px;
-}
+@source "../../../core/src/**/*.{ts,tsx}";
+@source "../../../ui/src/**/*.{ts,tsx}";
 
 /* The host element should not inherit page styles; Tailwind preflight handles
  * the rest inside the shadow root. */
 :host {
   all: initial;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* Polish animations. Defined as plain CSS so they survive Tailwind's tree-shake
@@ -64,4 +50,19 @@
   .loupe-animate-fade {
     animation: none;
   }
+}
+
+/* Every interactive control inside the overlay/iframe should show the pointer
+ * cursor. Scoped to the injected sheet (shadow root + panel iframe + editing
+ * overlay), so it never leaks to the host page. */
+button:not(:disabled):not([aria-disabled="true"]),
+[role="button"]:not([aria-disabled="true"]),
+[role="menuitem"]:not([aria-disabled="true"]),
+[role="menuitemcheckbox"]:not([aria-disabled="true"]),
+[role="option"]:not([aria-disabled="true"]),
+[role="combobox"],
+[role="tab"],
+summary,
+label[for] {
+  cursor: pointer;
 }

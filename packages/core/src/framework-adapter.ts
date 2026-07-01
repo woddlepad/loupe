@@ -185,6 +185,22 @@ function cleanName(name: string | undefined): string | undefined {
   return trimmed;
 }
 
+/**
+ * Vuetify layout wrappers that only exist to position content. They are never a
+ * meaningful annotation target, so we drop them to keep the chain focused on the
+ * user's components — while keeping semantic Vuetify components (VBtn, VCard,
+ * VTextField, …), which tell the agent what design-system primitive was used.
+ */
+const VUETIFY_LAYOUT = new Set([
+  "VApp",
+  "VMain",
+  "VLayout",
+  "VContainer",
+  "VRow",
+  "VCol",
+  "VSpacer",
+]);
+
 function isInfra(name: string, framework: Framework): boolean {
   if (framework === "react") {
     return (
@@ -197,5 +213,11 @@ function isInfra(name: string, framework: Framework): boolean {
     );
   }
 
-  return name === "Transition" || name === "KeepAlive" || name === "Teleport" || name === "Suspense";
+  return (
+    name === "Transition" ||
+    name === "KeepAlive" ||
+    name === "Teleport" ||
+    name === "Suspense" ||
+    VUETIFY_LAYOUT.has(name)
+  );
 }
