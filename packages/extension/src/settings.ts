@@ -8,6 +8,8 @@ export interface BridgeRoute {
   bridgeUrl: string;
 }
 
+export type CodexLaunchMode = "background" | "url-handler";
+
 export interface LoupeSettings {
   /** Bridge daemon base URL. */
   bridgeUrl: string;
@@ -26,6 +28,14 @@ export interface LoupeSettings {
   bridgeRoutes: BridgeRoute[];
   /** Optional manual routing override for ambiguous origins, e.g. many apps reusing localhost:5173. */
   activeRepoRoot?: string;
+  /** How the built-in Codex action should hand off annotations. */
+  codexLaunchMode: CodexLaunchMode;
+  /**
+   * Action ids (agent providers) the user has hidden from the Loupe panels,
+   * even when the bridge advertises them. The bridge already hides providers
+   * whose binary isn't installed; this is an additional per-user opt-out.
+   */
+  disabledProviders: string[];
 }
 
 export const DEFAULT_SETTINGS: LoupeSettings = {
@@ -33,7 +43,15 @@ export const DEFAULT_SETTINGS: LoupeSettings = {
   author: "me",
   projectOrigins: DEFAULT_PROJECT_ORIGINS,
   bridgeRoutes: [],
+  codexLaunchMode: "background",
+  disabledProviders: [],
 };
+
+/** Drop actions the user has disabled in settings. `save` is never filtered. */
+export function enabledActions<T extends { id: string }>(actions: T[], settings: LoupeSettings): T[] {
+  const disabled = new Set(settings.disabledProviders);
+  return actions.filter((a) => a.id === "save" || !disabled.has(a.id));
+}
 
 export async function loadSettings(): Promise<LoupeSettings> {
   const stored = await chrome.storage.sync.get(DEFAULT_SETTINGS);

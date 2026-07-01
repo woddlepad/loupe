@@ -5,16 +5,27 @@ import {
   type Annotation,
   type AnnotationTarget,
   type ComponentRef,
+  type ConsoleEntry,
+  type FlowRecorder,
   type LibraryItem,
   type LoupeOverlayDraft,
+  type NetworkEntry,
+  type PageErrorEntry,
+  type RecordingEventMarker,
+  type RecordingKeyframe,
 } from "@loupe/core";
-import overlayCss from "./styles/overlay.gen.css";
+import overlayCssRaw from "./styles/overlay.gen.css";
+
+// Resolve the self-hosted font placeholder to absolute extension URLs so the
+// injected shadow-root stylesheet loads Geist locally (no CDN, GDPR-safe).
+const overlayCss = overlayCssRaw.replaceAll("__LOUPE_ASSET__", chrome.runtime.getURL(""));
 import type {
   ActionsResult,
   AnnotateResult,
   CaptureResult,
   GroupsResult,
   LoupeMessage,
+  RecordingResult,
   ReferenceImageResult,
   ReferenceItem,
   ReferencesResult,
@@ -22,8 +33,9 @@ import type {
   SimpleResult,
 } from "./messages.js";
 import { isProjectUrl } from "./origins.js";
-import { bridgeUrlForUrl, loadSettings } from "./settings.js";
+import { bridgeUrlForUrl, enabledActions, loadSettings } from "./settings.js";
 import { LoupeViewer } from "./viewer.js";
+import type { LoupeMode } from "./viewer-app.js";
 
 /**
  * Content script: mounts the annotate overlay and the viewer. On a project
@@ -48,6 +60,29 @@ async function toggleAnnotate(): Promise<void> {
   await startAnnotating(await loadDraft());
 }
 
+/**
+ * Driven by the viewer's Select/Annotate toolbar. Annotation mode turns on the
+ * drag-select overlay while keeping the (minimized) viewer toolbar in front so
+ * the user can add several annotations and switch back to Select.
+ */
+function handleViewerMode(nextMode: LoupeMode): void {
+  if (nextMode === "annotate") {
+    void enterAnnotateFromViewer();
+  } else {
+    overlay?.disable();
+  }
+}
+
+async function enterAnnotateFromViewer(): Promise<void> {
+  if (!overlay?.active) await startAnnotating(await loadDraft());
+  viewer?.bringToFront();
+}
+
+/** Overlay dismissed (Esc / toggle / submit) — snap the toolbar back to Select. */
+function handleOverlayDisabled(): void {
+  viewer?.setMode("select");
+}
+
 async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<void> {
   const settings = await loadSettings();
   bridgeUrl = bridgeUrlForUrl(settings, location.href);
@@ -65,6 +100,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
       draft: restoreDraft,
       onDraftChange: saveDraft,
       onSubmit: handleSubmit,
+      onDisable: handleOverlayDisabled,
     });
   } else {
     const [actions, groups, lastGroup, library] = await Promise.all([
@@ -74,7 +110,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
       fetchLibrary(),
     ]);
     overlay = new LoupeOverlay({
-      actions,
+      actions: enabledActions(actions, settings),
       groups,
       defaultGroup: lastGroup,
       createGroup,
@@ -87,6 +123,9 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
       draft: restoreDraft,
       onDraftChange: saveDraft,
       onSubmit: handleSubmit,
+      onDisable: handleOverlayDisabled,
+      // tabCapture + offscreen are Chrome-only; hide recording on other builds.
+      recorder: navigator.userAgent.includes("Firefox") ? null : flowRecorder,
     });
   }
   overlay.enable();
@@ -94,11 +133,12 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
 
 function toggleView(): void {
   overlay?.disable();
-  viewer ??= new LoupeViewer(overlayCss);
+  viewer ??= new LoupeViewer(overlayCss, handleViewerMode);
   viewer.toggle();
 }
 
 async function handleSubmit(annotation: Annotation, actionIds: string[]): Promise<void> {
+  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds);
   // Hide our own chrome so the screenshot is the page only, then capture.
   overlay?.setChromeVisible(false);
   await nextFrame();
@@ -134,6 +174,379 @@ async function handleSubmit(annotation: Annotation, actionIds: string[]): Promis
     .map(([id, r]) => `${id} ${r.ok ? "✓" : "✗"}${r.detail ? ` (${r.detail})` : ""}`)
     .join("  ·  ");
   toast(`${annotation.group ? `[${annotation.group}] ` : ""}saved → ${res.dir}${ran ? `\n${ran}` : ""}${clipboardDetail ? `\n${clipboardDetail}` : ""}`);
+}
+
+async function handleRecordingSubmit(annotation: Annotation, actionIds: string[]): Promise<void> {
+  const res = (await chrome.runtime.sendMessage({
+    type: "record",
+    payload: { annotation, actions: actionsWithSave(actionIds) },
+  } satisfies LoupeMessage)) as AnnotateResult;
+  if (!res.ok) throw new Error(res.error);
+  const ran = Object.entries(res.results)
+    .map(([id, r]) => `${id} ${r.ok ? "✓" : "✗"}${r.detail ? ` (${r.detail})` : ""}`)
+    .join("  ·  ");
+  toast(`${annotation.group ? `[${annotation.group}] ` : ""}recording saved → ${res.dir}${ran ? `\n${ran}` : ""}`);
+}
+
+// --- flow recorder ---
+
+const RECORD_CTL = "loupe:record-ctl";
+const RECORD_COLLECT = "loupe:record-collect";
+const RECORD_COLLECTED = "loupe:record-collected";
+const MAX_RECORDING_EVENTS = 200;
+const MAX_KEYFRAMES = 32;
+const CLICK_FRAME_OFFSET_MS = 220;
+const TYPING_SETTLE_MS = 650;
+
+/**
+ * The recorder handed to the overlay. The background owns the tab video capture;
+ * the MAIN-world page instrument owns console/network/error buffering. We start
+ * both, then merge the video and telemetry into one RecordingCapture on stop.
+ */
+const flowRecorder: FlowRecorder = {
+  async start(): Promise<void> {
+    const res = (await chrome.runtime.sendMessage({ type: "start-recording" } satisfies LoupeMessage)) as SimpleResult;
+    if (!res.ok) throw new Error(res.error);
+    instrumentControl("start");
+    startInteractionTimeline();
+  },
+  async stop() {
+    const events = stopInteractionTimeline();
+    let res: RecordingResult;
+    try {
+      res = (await chrome.runtime.sendMessage({ type: "stop-recording" } satisfies LoupeMessage)) as RecordingResult;
+    } catch (e) {
+      await collectInstrumentation();
+      throw e;
+    }
+    const telemetry = await collectInstrumentation();
+    if (!res.ok) throw new Error(res.error);
+    const keyframes = await extractKeyframesFromRecording(res.videoDataUrl, events, res.durationMs);
+    return {
+      startedAt: res.startedAt,
+      durationMs: res.durationMs,
+      videoDataUrl: res.videoDataUrl,
+      console: telemetry.console,
+      network: telemetry.network,
+      errors: telemetry.errors,
+      events,
+      keyframes,
+    };
+  },
+  cancel(): void {
+    stopInteractionTimeline();
+    instrumentControl("reset");
+    void chrome.runtime.sendMessage({ type: "cancel-recording" } satisfies LoupeMessage);
+  },
+};
+
+let interactionRecording = false;
+let interactionStartMs = 0;
+let interactionEvents: RecordingEventMarker[] = [];
+let typingTimer: number | null = null;
+let typingTarget: EventTarget | null = null;
+
+function startInteractionTimeline(): void {
+  stopInteractionTimeline();
+  interactionRecording = true;
+  interactionStartMs = performance.now();
+  interactionEvents = [];
+  window.addEventListener("click", onRecordingClick, true);
+  window.addEventListener("keydown", onRecordingKeyDown, true);
+  window.addEventListener("input", onRecordingInput, true);
+}
+
+function stopInteractionTimeline(): RecordingEventMarker[] {
+  if (!interactionRecording && interactionEvents.length === 0) return [];
+  flushTypingSettled();
+  interactionRecording = false;
+  window.removeEventListener("click", onRecordingClick, true);
+  window.removeEventListener("keydown", onRecordingKeyDown, true);
+  window.removeEventListener("input", onRecordingInput, true);
+  const events = interactionEvents.slice();
+  interactionEvents = [];
+  return events;
+}
+
+function onRecordingClick(e: MouseEvent): void {
+  if (!interactionRecording || isLoupeEventTarget(e.target)) return;
+  const target = e.target instanceof Element ? e.target : null;
+  pushRecordingEvent({
+    kind: "click",
+    t: recordingNow(),
+    label: `click ${describeEventTarget(target)}`,
+    x: Math.round(e.clientX),
+    y: Math.round(e.clientY),
+    selector: selectorForEventTarget(target),
+    text: textForEventTarget(target),
+  });
+}
+
+function onRecordingKeyDown(e: KeyboardEvent): void {
+  if (!interactionRecording || isLoupeEventTarget(e.target) || isModifierOnlyKey(e)) return;
+  const target = e.target instanceof Element ? e.target : null;
+  if (isEditableEventTarget(target)) {
+    if (typingTarget !== e.target) {
+      flushTypingSettled();
+      typingTarget = e.target;
+      pushRecordingEvent({
+        kind: "typing-start",
+        t: recordingNow(),
+        label: `before typing in ${describeEventTarget(target)}`,
+        selector: selectorForEventTarget(target),
+        text: textForEventTarget(target),
+      });
+    }
+    scheduleTypingSettled();
+    return;
+  }
+  pushRecordingEvent({
+    kind: "key",
+    t: recordingNow(),
+    label: `key ${e.key} on ${describeEventTarget(target)}`,
+    key: e.key,
+    selector: selectorForEventTarget(target),
+    text: textForEventTarget(target),
+  });
+}
+
+function onRecordingInput(e: Event): void {
+  if (!interactionRecording || isLoupeEventTarget(e.target)) return;
+  if (isEditableEventTarget(e.target instanceof Element ? e.target : null)) scheduleTypingSettled();
+}
+
+function scheduleTypingSettled(): void {
+  if (typingTimer !== null) window.clearTimeout(typingTimer);
+  typingTimer = window.setTimeout(flushTypingSettled, TYPING_SETTLE_MS);
+}
+
+function flushTypingSettled(): void {
+  if (typingTimer !== null) {
+    window.clearTimeout(typingTimer);
+    typingTimer = null;
+  }
+  if (!typingTarget) return;
+  const target = typingTarget instanceof Element ? typingTarget : null;
+  typingTarget = null;
+  pushRecordingEvent({
+    kind: "typing-settled",
+    t: recordingNow(),
+    label: `after typing in ${describeEventTarget(target)}`,
+    selector: selectorForEventTarget(target),
+    text: textForEventTarget(target),
+  });
+}
+
+function pushRecordingEvent(event: RecordingEventMarker): void {
+  if (interactionEvents.length >= MAX_RECORDING_EVENTS) return;
+  interactionEvents.push(event);
+}
+
+function recordingNow(): number {
+  return Math.max(0, Math.round(performance.now() - interactionStartMs));
+}
+
+function isLoupeEventTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-loupe-overlay]"));
+}
+
+function isModifierOnlyKey(e: KeyboardEvent): boolean {
+  return ["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(e.key);
+}
+
+function isEditableEventTarget(target: Element | null): boolean {
+  if (!target) return false;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement) {
+    const type = target.type.toLowerCase();
+    return !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(type);
+  }
+  return target instanceof HTMLElement && target.isContentEditable;
+}
+
+function describeEventTarget(target: Element | null): string {
+  if (!target) return "page";
+  const text = textForEventTarget(target);
+  const testId = target.getAttribute("data-testid");
+  const slot = target.getAttribute("data-slot");
+  const name = target.getAttribute("aria-label") || target.getAttribute("name") || target.getAttribute("placeholder");
+  const tag = target.tagName.toLowerCase();
+  const detail = text || testId || slot || name;
+  return detail ? `${tag} "${detail}"` : tag;
+}
+
+function textForEventTarget(target: Element | null): string | undefined {
+  if (!target) return undefined;
+  let text = "";
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    text = target.value || target.placeholder || target.name || "";
+  } else {
+    text = target.textContent ?? "";
+  }
+  text = text.replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.length <= 120 ? text : `${text.slice(0, 119)}…`;
+}
+
+function selectorForEventTarget(target: Element | null): string | undefined {
+  if (!target) return undefined;
+  const id = target.id ? `#${cssEscape(target.id)}` : "";
+  if (id) return id;
+  const testId = target.getAttribute("data-testid");
+  if (testId) return `[data-testid="${cssEscape(testId)}"]`;
+  const slot = target.getAttribute("data-slot");
+  if (slot) return `[data-slot="${cssEscape(slot)}"]`;
+  return target.tagName.toLowerCase();
+}
+
+function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
+async function extractKeyframesFromRecording(
+  videoDataUrl: string | undefined,
+  events: RecordingEventMarker[],
+  durationMs: number,
+): Promise<RecordingKeyframe[]> {
+  if (!videoDataUrl || events.length === 0) return [];
+  const targets = keyframeTargets(events, durationMs);
+  if (targets.length === 0) return [];
+  try {
+    return await renderVideoFrames(videoDataUrl, targets);
+  } catch (e) {
+    console.warn("[loupe] keyframe extraction failed", e);
+    return [];
+  }
+}
+
+function keyframeTargets(events: RecordingEventMarker[], durationMs: number): RecordingKeyframe[] {
+  const duration = Math.max(0, durationMs);
+  const frames: RecordingKeyframe[] = [];
+  for (const event of events) {
+    if (frames.length >= MAX_KEYFRAMES) break;
+    const offset = event.kind === "click" || event.kind === "key" ? CLICK_FRAME_OFFSET_MS : 0;
+    const t = clampFrameTime(event.t + offset, duration);
+    if (frames.some((f) => Math.abs(f.t - t) < 180)) continue;
+    frames.push({
+      t,
+      eventT: event.t,
+      label: frameLabel(event),
+    });
+  }
+  return frames;
+}
+
+function frameLabel(event: RecordingEventMarker): string {
+  if (event.kind === "click") return `after ${event.label}`;
+  if (event.kind === "key") return `after ${event.label}`;
+  return event.label;
+}
+
+function clampFrameTime(ms: number, durationMs: number): number {
+  if (durationMs <= 0) return Math.max(0, ms);
+  return Math.max(0, Math.min(ms, Math.max(0, durationMs - 80)));
+}
+
+async function renderVideoFrames(videoDataUrl: string, frames: RecordingKeyframe[]): Promise<RecordingKeyframe[]> {
+  const video = document.createElement("video");
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  video.src = videoDataUrl;
+  video.style.cssText = "position:fixed;left:-99999px;top:-99999px;width:1px;height:1px;opacity:0;pointer-events:none";
+  document.body.append(video);
+  try {
+    await waitForVideoMetadata(video);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, video.videoWidth);
+    canvas.height = Math.max(1, video.videoHeight);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    const rendered: RecordingKeyframe[] = [];
+    for (const frame of frames) {
+      await seekVideo(video, frame.t / 1000);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      rendered.push({ ...frame, dataUrl: canvas.toDataURL("image/png") });
+    }
+    return rendered;
+  } finally {
+    video.remove();
+  }
+}
+
+function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+  if (video.readyState >= HTMLMediaElement.HAVE_METADATA && video.videoWidth > 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => done(new Error("video metadata timeout")), 4000);
+    function done(error?: Error): void {
+      window.clearTimeout(timeout);
+      video.removeEventListener("loadedmetadata", onLoaded);
+      video.removeEventListener("error", onError);
+      error ? reject(error) : resolve();
+    }
+    function onLoaded(): void {
+      done();
+    }
+    function onError(): void {
+      done(new Error("video failed to load"));
+    }
+    video.addEventListener("loadedmetadata", onLoaded);
+    video.addEventListener("error", onError);
+    video.load();
+  });
+}
+
+function seekVideo(video: HTMLVideoElement, seconds: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => done(new Error("video seek timeout")), 4000);
+    function done(error?: Error): void {
+      window.clearTimeout(timeout);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+      error ? reject(error) : resolve();
+    }
+    function onSeeked(): void {
+      done();
+    }
+    function onError(): void {
+      done(new Error("video seek failed"));
+    }
+    video.addEventListener("seeked", onSeeked);
+    video.addEventListener("error", onError);
+    video.currentTime = seconds;
+  });
+}
+
+function instrumentControl(action: "start" | "stop" | "reset"): void {
+  window.dispatchEvent(new CustomEvent(RECORD_CTL, { detail: { action } }));
+}
+
+/** Stop buffering and pull the captured console/network/errors from the page. */
+function collectInstrumentation(): Promise<{
+  console: ConsoleEntry[];
+  network: NetworkEntry[];
+  errors: PageErrorEntry[];
+}> {
+  instrumentControl("stop");
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => done({ console: [], network: [], errors: [] }), 600);
+
+    function onCollected(event: Event): void {
+      const detail = (event as CustomEvent<{ id?: string; console?: ConsoleEntry[]; network?: NetworkEntry[]; errors?: PageErrorEntry[] }>).detail;
+      if (detail?.id !== id) return;
+      done({ console: detail.console ?? [], network: detail.network ?? [], errors: detail.errors ?? [] });
+    }
+
+    function done(data: { console: ConsoleEntry[]; network: NetworkEntry[]; errors: PageErrorEntry[] }): void {
+      window.clearTimeout(timeout);
+      window.removeEventListener(RECORD_COLLECTED, onCollected);
+      resolve(data);
+    }
+
+    window.addEventListener(RECORD_COLLECTED, onCollected);
+    window.dispatchEvent(new CustomEvent(RECORD_COLLECT, { detail: { id } }));
+  });
 }
 
 function actionsWithSave(actionIds: string[]): string[] {
@@ -463,10 +876,11 @@ function toast(text: string): void {
   const root = host.attachShadow({ mode: "open" });
   const style = document.createElement("style");
   style.textContent = `
-    .t { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    .t { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
          background: #101010; color: #f8f8f8; padding: 9px 14px; border-radius: 12px;
          font: 13px ui-sans-serif, system-ui, sans-serif; z-index: 2147483647; white-space: pre-line;
-         box-shadow: 0 12px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); max-width: 440px; }`;
+         box-shadow: 0 12px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
+         box-sizing: border-box; max-width: min(440px, calc(100vw - 32px)); overflow-wrap: anywhere; }`;
   const toastEl = document.createElement("div");
   toastEl.className = "t";
   toastEl.textContent = text;

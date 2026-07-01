@@ -6,6 +6,8 @@ import type {
   GroupsResult,
   ListResult,
   LoupeMessage,
+  RecordingResult,
+  RecordingsResult,
   ReferenceImageResult,
   ReferencesResult,
   ResolveResult,
@@ -59,7 +61,7 @@ async function toggleActiveTab(type: "toggle" | "toggle-view"): Promise<{ ok: bo
 async function injectLoupe(tabId: number): Promise<void> {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["framework-inspector.js"],
+    files: ["framework-inspector.js", "page-instrument.js"],
     world: "MAIN",
   });
   await chrome.scripting.executeScript({
@@ -91,10 +93,10 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .then((b) => sendResponse({ ok: true, annotations: b.annotations } satisfies ListResult))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies ListResult));
       return true;
-    case "comment":
-      bridgePost(`/annotations/${encodeURIComponent(msg.id)}/comments`, msg.comment, senderUrl(sender))
-        .then(() => sendResponse({ ok: true } satisfies SimpleResult))
-        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
+    case "recordings":
+      bridgeGet("/recordings", senderUrl(sender))
+        .then((b) => sendResponse({ ok: true, recordings: b.recordings } satisfies RecordingsResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies RecordingsResult));
       return true;
     case "update-annotation":
       bridgePost(`/annotations/${encodeURIComponent(msg.id)}/update`, msg.patch, senderUrl(sender))
@@ -146,6 +148,22 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .then((b) => sendResponse({ ok: true, detail: b.detail } satisfies SimpleResult))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
       return true;
+    case "resolve-group":
+      bridgePost(`/groups/${encodeURIComponent(msg.slug)}/resolve`, {}, senderUrl(sender))
+        .then((b) => sendResponse({ ok: true, detail: String(b.count ?? 0) } satisfies SimpleResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
+      return true;
+    case "annotation-run":
+      bridgePost(`/annotations/${encodeURIComponent(msg.id)}/run`, { action: msg.action }, senderUrl(sender))
+        .then((b) =>
+          sendResponse(
+            b.ok
+              ? ({ ok: true, detail: b.detail } satisfies SimpleResult)
+              : ({ ok: false, error: b.detail ?? "action failed" } satisfies SimpleResult),
+          ),
+        )
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
+      return true;
     case "resolve-target":
       bridgePost("/resolve", { target: msg.target }, senderUrl(sender))
         .then((b) =>
@@ -193,6 +211,26 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies AnnotateResult));
       return true;
+    case "start-recording":
+      startRecording(sender.tab?.id)
+        .then(sendResponse)
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
+      return true;
+    case "stop-recording":
+      stopRecording()
+        .then(sendResponse)
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies RecordingResult));
+      return true;
+    case "cancel-recording":
+      cancelRecording()
+        .then(() => sendResponse({ ok: true } satisfies SimpleResult))
+        .catch(() => sendResponse({ ok: true } satisfies SimpleResult));
+      return true;
+    case "record":
+      deliverRecording(msg.payload)
+        .then((r) => sendResponse(r))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies AnnotateResult));
+      return true;
     default:
       return undefined;
   }
@@ -224,6 +262,124 @@ async function deliver(payload: AnnotatePayload): Promise<AnnotateResult> {
   let res: Response;
   try {
     res = await fetch(await bridgeRequestUrl("/annotate", payload.annotation.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    return { ok: false, error: daemonHelp(bridgeUrl) };
+  }
+  if (!res.ok) return { ok: false, error: `bridge responded ${res.status}` };
+  const body = (await res.json()) as {
+    id: string;
+    dir: string;
+    results: Record<string, { ok: boolean; detail?: string; url?: string }>;
+  };
+  return { ok: true, id: body.id, dir: body.dir, results: body.results };
+}
+
+// --- flow recording (tabCapture → offscreen MediaRecorder) ---
+
+let recordingTabId: number | null = null;
+
+/**
+ * Begin recording the active tab. We grab a `tabCapture` stream id here (the
+ * privileged context) and hand it to the offscreen document, which owns the
+ * MediaRecorder. Requires the extension to have been invoked on the tab
+ * (activeTab), which Loupe already holds once the overlay is open.
+ */
+async function startRecording(tabId: number | undefined): Promise<SimpleResult> {
+  if (tabId === undefined) return { ok: false, error: "no active tab to record" };
+  try {
+    await ensureOffscreenDocument();
+    const streamId = await getTabStreamId(tabId);
+    const res = (await chrome.runtime.sendMessage({ type: "offscreen-start", streamId })) as
+      | { ok: boolean; error?: string }
+      | undefined;
+    if (!res?.ok) {
+      await closeOffscreenDocument();
+      return { ok: false, error: res?.error ?? "offscreen recorder failed to start" };
+    }
+    recordingTabId = tabId;
+    return { ok: true };
+  } catch (e) {
+    await closeOffscreenDocument();
+    return { ok: false, error: recordingError(e) };
+  }
+}
+
+async function stopRecording(): Promise<RecordingResult> {
+  try {
+    const res = (await chrome.runtime.sendMessage({ type: "offscreen-stop" })) as
+      | { ok: boolean; error?: string; videoDataUrl?: string; durationMs?: number; startedAt?: string }
+      | undefined;
+    recordingTabId = null;
+    await closeOffscreenDocument();
+    if (!res?.ok) return { ok: false, error: res?.error ?? "recorder failed to stop" };
+    return {
+      ok: true,
+      videoDataUrl: res.videoDataUrl,
+      durationMs: res.durationMs ?? 0,
+      startedAt: res.startedAt ?? new Date().toISOString(),
+    };
+  } catch (e) {
+    recordingTabId = null;
+    await closeOffscreenDocument();
+    return { ok: false, error: String(e) };
+  }
+}
+
+async function cancelRecording(): Promise<void> {
+  recordingTabId = null;
+  try {
+    await chrome.runtime.sendMessage({ type: "offscreen-cancel" });
+  } catch {
+    // offscreen may already be gone
+  }
+  await closeOffscreenDocument();
+}
+
+function getTabStreamId(tabId: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
+      const err = chrome.runtime.lastError;
+      if (err || !streamId) reject(new Error(err?.message ?? "could not capture this tab"));
+      else resolve(streamId);
+    });
+  });
+}
+
+async function ensureOffscreenDocument(): Promise<void> {
+  const has = await chrome.offscreen.hasDocument?.();
+  if (has) return;
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: [chrome.offscreen.Reason.USER_MEDIA],
+    justification: "Record the active tab for a Loupe flow annotation.",
+  });
+}
+
+async function closeOffscreenDocument(): Promise<void> {
+  try {
+    if (await chrome.offscreen.hasDocument?.()) await chrome.offscreen.closeDocument();
+  } catch {
+    // best-effort cleanup
+  }
+}
+
+function recordingError(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  if (/invoked|gesture|activeTab/i.test(message)) {
+    return `${message} — open the Loupe overlay (Alt+A) on this tab first, then press R.`;
+  }
+  return message;
+}
+
+async function deliverRecording(payload: AnnotatePayload): Promise<AnnotateResult> {
+  const bridgeUrl = await bridgeUrlForPage(payload.annotation.url);
+  let res: Response;
+  try {
+    res = await fetch(await bridgeRequestUrl("/record", payload.annotation.url), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -323,6 +479,7 @@ async function bridgeRequestUrl(path: string, pageUrl?: string): Promise<string>
   const url = new URL(path, base.endsWith("/") ? base : `${base}/`);
   if (pageUrl) url.searchParams.set("pageUrl", pageUrl);
   if (settings.activeRepoRoot) url.searchParams.set("repoRoot", settings.activeRepoRoot);
+  url.searchParams.set("codexMode", settings.codexLaunchMode);
   return url.toString();
 }
 

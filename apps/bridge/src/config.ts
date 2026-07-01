@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { LinearConfig } from "./actions/linear.js";
 
+export type CodexLaunchMode = "background" | "url-handler";
+
 /**
  * An agent command template. Placeholders are substituted per-annotation:
  *   {prompt}     — the full instruction string
@@ -54,20 +56,37 @@ export interface BridgeConfig {
   };
 }
 
-function defaultAgents(): Record<string, AgentCommand> {
+export function codexBackgroundAgent(): AgentCommand {
   const codexCloudEnv = process.env["LOUPE_CODEX_CLOUD_ENV"] ?? process.env["CODEX_CLOUD_ENV"];
+  if (codexCloudEnv) {
+    return { mode: "spawn", argv: ["codex", "cloud", "exec", "--env", codexCloudEnv, "{loupeCommand}"] };
+  }
+  return { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"] };
+}
+
+export function codexUrlHandlerAgent(): AgentCommand {
+  return { mode: "codex-app" };
+}
+
+export function defaultAgents(): Record<string, AgentCommand> {
   const codexAppServer = process.env["LOUPE_CODEX_APP_SERVER"];
   return {
     // Claude: start a background Claude Code run that picks up the saved Loupe
     // bundle through the installed /loupe slash command.
     claude: { mode: "spawn", argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] },
-    // Codex Desktop: open a real app thread so the handoff is visible. For
-    // phone-visible Cloud tasks, set LOUPE_CODEX_CLOUD_ENV to a Codex Cloud env.
-    codex: codexCloudEnv
-      ? { mode: "spawn", argv: ["codex", "cloud", "exec", "--env", codexCloudEnv, "{loupeCommand}"] }
-      : codexAppServer
-        ? { mode: "codex-app-server", socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"] }
-        : { mode: "codex-app" },
+    // Codex: run in the background by default. For remote Desktop handoff,
+    // LOUPE_CODEX_APP_SERVER keeps the existing app-server behavior explicit.
+    codex: codexAppServer
+      ? { mode: "codex-app-server", socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"] }
+      : codexBackgroundAgent(),
+    // GitHub Copilot CLI: the standalone `copilot` binary (not the deprecated
+    // `gh copilot` extension). It has no /loupe shim, so it receives the full
+    // self-contained inline prompt. --allow-all-tools skips per-tool approval.
+    copilot: { mode: "spawn", argv: ["copilot", "--allow-all-tools", "-p", "{prompt}"] },
+    // Pi coding agent (@earendil-works/pi-coding-agent): headless single-shot
+    // via -p. It gets the inline prompt plus the bundle images attached with
+    // `@path` (pi is vision-capable) so it can actually see the screenshot.
+    pi: { mode: "spawn", argv: ["pi", "-p", "{atImages}", "{prompt}"] },
   };
 }
 

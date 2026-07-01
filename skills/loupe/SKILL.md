@@ -1,6 +1,6 @@
 ---
 name: loupe
-description: Implement UI feedback captured by the Loupe browser extension. Use when the user asks for "/loupe", "$loupe", "Loupe annotation", a Loupe group name, or a Loupe annotation id; especially when fixing annotations stored under .loupe/annotations with screenshot/reference images, note.md, meta.json, selector, URL, source hints, and comments.jsonl.
+description: Implement UI feedback captured by the Loupe browser extension. Use when the user asks for "/loupe", "$loupe", "Loupe annotation", a Loupe group name, or a Loupe annotation id; especially when fixing annotations stored under .loupe/annotations with screenshot/reference images, note.md, meta.json, selector, URL, and source hints.
 ---
 
 # Loupe Annotation Implementer
@@ -35,7 +35,6 @@ Read the emitted Markdown fully before editing. It contains absolute paths to:
 - `meta.json`
 - `shot.png`
 - reference images under `refs/`
-- `comments.jsonl`
 
 If no argument is provided, list available groups and annotations, then ask which to implement.
 
@@ -67,16 +66,46 @@ loupe init --origin staging.acme.com --port 5174
 7. Mark each implemented annotation as needing human review:
 
 ```bash
-loupe comment <annotation_id> --status needs_review --author agent:<agent-name> --body "Implemented: <summary>. Checks: <commands run>."
+loupe status <annotation_id> --status needs_review --author agent:<agent-name>
 ```
 
-Use `agent:codex`, `agent:claude`, or another accurate agent name.
+Use `agent:codex`, `agent:claude`, or another accurate agent name. Summarize what
+you implemented and the checks you ran in your reply to the user.
 
-If the CLI is unavailable for commenting, append the equivalent JSON line to the annotation's `comments.jsonl`:
+## Flow recordings
 
-```json
-{"author":"agent:<agent-name>","body":"Implemented: <short summary>. Checks: <commands run>.","createdAt":"<iso timestamp>","status":"needs_review"}
-```
+Some captures are **flow recordings** (video annotations) instead of single-region
+screenshots. `loupe show <id>` marks them as `Flow recording` and they live under
+`.loupe/recordings/<group>/<id>/` instead of `.loupe/annotations/`. A recording
+bundle contains:
+
+- `recording.webm` — screen capture of the tab (for the **human** reviewer).
+- `keyframes/*.png` — still frames extracted from the recording at important
+  click and debounced typing timestamps. These are the primary visual evidence
+  for agents.
+- `events.jsonl` — click/typing/key markers with millisecond timestamps, labels,
+  selectors, coordinates, and target text when available.
+- `console.log` — every `console.*` call during the flow, timestamped from `0.0s`.
+- `network.jsonl` — one JSON object per `fetch`/XHR (`method`, `url`, `status`,
+  `ok`, `durationMs`, `error`).
+- `errors.jsonl` — uncaught errors and unhandled promise rejections.
+- `note.md` — the user's request plus a surfaced list of errors and failed requests.
+- `meta.json` — as usual.
+
+How to work a recording:
+
+1. You cannot watch the video. **Read `note.md`, inspect every `keyframes/*.png`,
+   then read `events.jsonl`, `console.log`, `network.jsonl`, and `errors.jsonl`**.
+   Keyframes show the visual state around clicks and typing bursts; logs are the
+   machine-readable record of what happened.
+2. Correlate the user's note with concrete evidence: click/typing markers, visual
+   keyframes, errors thrown, requests that returned `>= 400` or failed, and noisy
+   warnings. The `t` field on each entry is milliseconds-into-the-flow, so you
+   can reconstruct ordering across keyframes, events, console, network, and errors.
+3. Find the code from the page URL, the failing request URLs/handlers, error stack
+   frames, and component/file search — recordings have no single selected element.
+4. Implement the fix, run checks, and close the loop with `loupe status` exactly
+   as for a normal annotation.
 
 ## Rules
 

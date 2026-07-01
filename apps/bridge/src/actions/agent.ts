@@ -11,21 +11,50 @@ import type { SourceResolution } from "../resolve/index.js";
 import type { StoredAnnotation } from "../store.js";
 import type { Action, ActionContext, ActionOutcome } from "./types.js";
 
-/** Build one action per configured agent (claude, codex, …). */
+/**
+ * Build one action per configured agent (claude, codex, copilot, pi, …).
+ * Spawn-mode agents whose binary isn't installed are omitted, so Loupe only
+ * advertises providers the machine can actually run.
+ */
 export function agentActions(config: BridgeConfig): Action[] {
-  return Object.entries(config.agents).map(([name, cmd]) => ({
-    id: name,
-    label: capitalize(name),
-    hint: agentHint(name, cmd),
-    run: (ctx: ActionContext) =>
-      cmd.mode === "session"
-        ? sessionOutcome(name, ctx)
-        : cmd.mode === "codex-app-server"
-          ? openCodexAppServer(name, cmd, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
-          : cmd.mode === "codex-app"
-          ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
-          : runAgent(name, cmd, ctx),
-  }));
+  return Object.entries(config.agents)
+    .filter(([, cmd]) => agentAvailable(cmd))
+    .map(([name, cmd]) => ({
+      id: name,
+      label: capitalize(name),
+      hint: agentHint(name, cmd),
+      run: (ctx: ActionContext) =>
+        cmd.mode === "session"
+          ? sessionOutcome(name, ctx)
+          : cmd.mode === "codex-app-server"
+            ? openCodexAppServer(name, cmd, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
+            : cmd.mode === "codex-app"
+              ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
+              : runAgent(name, cmd, ctx),
+    }));
+}
+
+/**
+ * Whether an agent should be advertised. Spawn-mode agents require their binary
+ * on PATH; other modes (session, codex-app, codex-app-server) aren't a simple
+ * PATH check, so they're always advertised.
+ */
+export function agentAvailable(cmd: AgentCommand): boolean {
+  if (cmd.mode && cmd.mode !== "spawn") return true;
+  return Boolean(cmd.argv?.length) && commandAvailable(cmd.argv![0]!);
+}
+
+/** Split configured agents into detected vs hidden (binary not on PATH). */
+export function agentAvailability(agents: Record<string, AgentCommand>): {
+  available: string[];
+  hidden: string[];
+} {
+  const available: string[] = [];
+  const hidden: string[] = [];
+  for (const [name, cmd] of Object.entries(agents)) {
+    (agentAvailable(cmd) ? available : hidden).push(name);
+  }
+  return { available, hidden };
 }
 
 /** Session mode: the bundle is already written; nothing to spawn. */
@@ -38,8 +67,11 @@ export function sessionOutcome(name: string, ctx: ActionContext): ActionOutcome 
 
 function runAgent(name: string, cmd: AgentCommand, ctx: ActionContext): ActionOutcome {
   if (!cmd.argv?.length) return { ok: false, detail: `${name}: no argv configured for spawn mode` };
-  const prompt = buildPrompt(name, ctx.annotation, ctx.bundle, ctx.resolution);
-  const images = [ctx.bundle.screenshot, ...ctx.bundle.references].filter((p): p is string => Boolean(p));
+  const prompt =
+    ctx.annotation.kind === "recording"
+      ? buildRecordingPrompt(name, ctx.annotation, ctx.bundle)
+      : buildPrompt(name, ctx.annotation, ctx.bundle, ctx.resolution);
+  const images = [ctx.bundle.screenshot, ...ctx.bundle.references, ...ctx.bundle.keyframes].filter((p): p is string => Boolean(p));
   return spawnAgent(
     name,
     cmd,
@@ -169,6 +201,8 @@ export function expandAgentArgv(
   return (cmd.argv ?? []).flatMap((a) => {
     // {imageArgs} expands to `-i path1,path2` (Codex) or nothing when no images.
     if (a === "{imageArgs}") return images.length ? ["-i", images.join(",")] : [];
+    // {atImages} expands to one `@path` arg per image (Pi) or nothing when empty.
+    if (a === "{atImages}") return images.map((p) => `@${p}`);
     return [
       a
         .replaceAll("{prompt}", prompt)
@@ -182,7 +216,7 @@ export function expandAgentArgv(
   });
 }
 
-function commandAvailable(command: string): boolean {
+export function commandAvailable(command: string): boolean {
   if (process.platform === "win32" && command.toLowerCase() === "cmd") return true;
   if (command.includes("/")) return existsSync(command);
   const path = process.env.PATH ?? "";
@@ -210,8 +244,8 @@ function agentHint(name: string, cmd: AgentCommand): string {
 function closeLoop(agentName: string): string {
   return (
     "When done, run " +
-    `loupe comment <annotation_id> --status needs_review --author agent:${agentName} --body "Implemented: <summary>. Checks: <commands run>." ` +
-    "Do not mark the annotation resolved yourself; leave it for human review."
+    `loupe status <annotation_id> --status needs_review --author agent:${agentName} ` +
+    "to move it to review. Do not mark the annotation resolved yourself; leave it for human review."
   );
 }
 
@@ -246,6 +280,29 @@ function buildPrompt(agentName: string, a: Annotation, bundle: WrittenBundle, r:
     .join("\n");
 }
 
+function buildRecordingPrompt(agentName: string, a: Annotation, bundle: WrittenBundle): string {
+  const rec = a.recording;
+  const summary = rec
+    ? `Captured ${rec.console.length} console, ${rec.network.length} requests, ${rec.errors.length} errors, ${rec.events?.length ?? 0} events, ${bundle.keyframes.length} keyframes.`
+    : "";
+  return [
+    "You're picking up a Loupe flow recording — a screen recording captured alongside keyframes, page events, console logs, network logs, and errors. You cannot watch the video; use the still keyframes and logs.",
+    "",
+    `Recording bundle: ${bundle.dir}`,
+    `Page: ${a.title} — ${a.url}`,
+    a.group ? `Group: ${a.group}` : "",
+    summary,
+    bundle.keyframes.length ? `Keyframes: ${bundle.keyframes.join(", ")}` : "",
+    "Read in this order: note.md, keyframes, events.jsonl, console.log, network.jsonl, and errors.jsonl in the bundle. Correlate the note with clicks/typing, errors thrown, and requests that failed or returned >= 400, then find and fix the code.",
+    "",
+    a.note ? `Note: ${a.note}` : "Note: (none)",
+    "",
+    closeLoop(agentName),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildGroupPrompt(agentName: string, group: string, annotations: StoredAnnotation[]): string {
   const lines = annotations.map((a, i) => {
     const chain = a.target.componentChain.map((c) => c.name).join(" › ") || a.target.tag;
@@ -266,7 +323,7 @@ function buildGroupPrompt(agentName: string, group: string, annotations: StoredA
     "",
     ...lines,
     "",
-    `After implementing each, run \`loupe comment <id> --status needs_review --author agent:${agentName} --body "Implemented: ... Checks: ..."\`. Do not mark annotations resolved yourself; leave them for human review. Then summarize the whole change set.`,
+    `After implementing each, run \`loupe status <id> --status needs_review --author agent:${agentName}\`. Do not mark annotations resolved yourself; leave them for human review. Then summarize the whole change set.`,
   ].join("\n");
 }
 

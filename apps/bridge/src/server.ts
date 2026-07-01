@@ -1,18 +1,23 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, extname, resolve, sep } from "node:path";
-import type { Annotation, AnnotatePayload, AnnotationComment, AnnotationStatus } from "@loupe/core/model";
-import { runAgentGroup } from "./actions/agent.js";
+import { basename, extname, join, resolve, sep } from "node:path";
+import type { Annotation, AnnotatePayload, AnnotationStatus } from "@loupe/core/model";
+import { agentAvailability, runAgentGroup } from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
 import type { ActionOutcome } from "./actions/types.js";
-import { writeBundle, writeReference } from "./bundle.js";
-import { loadConfig, type BridgeConfig } from "./config.js";
-import { gitUserName } from "./git.js";
+import { writeBundle, writeRecordingBundle, writeReference, type WrittenBundle } from "./bundle.js";
+import {
+  codexBackgroundAgent,
+  codexUrlHandlerAgent,
+  loadConfig,
+  type BridgeConfig,
+  type CodexLaunchMode,
+} from "./config.js";
 import { matchingProjects, readProjectRegistry, type LoupeProjectConfig, type RegisteredProject } from "./project.js";
 import { Resolver } from "./resolve/index.js";
+import type { SourceResolution } from "./resolve/index.js";
 import {
   addAnnotationReference,
-  appendComment,
   createGroup,
   deleteGroup,
   deleteAnnotation,
@@ -21,11 +26,14 @@ import {
   deleteResolvedAnnotations,
   groupSummaries,
   listAnnotations,
+  listRecordings,
   listReferences,
   moveAnnotationToGroup,
   renameGroup,
   reorderGroups,
   referenceImageDataUrl,
+  resolveGroup,
+  type StoredAnnotation,
   updateAnnotation,
 } from "./store.js";
 
@@ -62,6 +70,17 @@ export function createBridge(config: BridgeConfig) {
           done();
         });
       });
+      // Detect installed agent CLIs at startup: warm the default project's
+      // context (so the first request is instant) and report which agents are
+      // available vs hidden because their binary isn't on PATH.
+      try {
+        const ctx = await contextForRequest(config, contexts, undefined, undefined, undefined);
+        const { available, hidden } = agentAvailability(ctx.config.agents);
+        console.log(`[loupe] agents available: ${available.join(", ") || "none"}`);
+        if (hidden.length) console.log(`[loupe] agents hidden (CLI not found on PATH): ${hidden.join(", ")}`);
+      } catch (e) {
+        console.warn(`[loupe] agent detection failed: ${String(e)}`);
+      }
     },
     close: () => new Promise<void>((done) => server.close(() => done())),
   };
@@ -78,11 +97,12 @@ async function handleRequest(
   const method = req.method ?? "GET";
   const pageUrl = url.searchParams.get("pageUrl") ?? undefined;
   const repoRoot = url.searchParams.get("repoRoot") ?? undefined;
+  const codexLaunchMode = parseCodexLaunchMode(url.searchParams.get("codexMode"));
 
   if (method === "GET" && path === "/projects") {
     const projects = readProjectRegistry().projects;
     const matches = matchingProjects(pageUrl, projects);
-    const ctx = await contextForRequest(baseConfig, contexts, pageUrl, repoRoot);
+    const ctx = await contextForRequest(baseConfig, contexts, pageUrl, repoRoot, codexLaunchMode);
     return json(res, 200, {
       projects,
       matches,
@@ -93,7 +113,13 @@ async function handleRequest(
     });
   }
 
-  const { config, resolver, registry } = await contextForRequest(baseConfig, contexts, pageUrl, repoRoot);
+  const { config, resolver, registry } = await contextForRequest(
+    baseConfig,
+    contexts,
+    pageUrl,
+    repoRoot,
+    codexLaunchMode,
+  );
 
   if (method === "GET" && path === "/health") {
     return json(res, 200, {
@@ -145,6 +171,14 @@ async function handleRequest(
       handleAnnotate(config, resolver, registry, JSON.parse(b) as AnnotatePayload),
     );
   }
+  if (method === "GET" && path === "/recordings") {
+    return json(res, 200, { recordings: listRecordings(config.repoRoot) });
+  }
+  if (method === "POST" && path === "/record") {
+    return withBody(req, res, (b) =>
+      handleRecord(config, resolver, registry, JSON.parse(b) as AnnotatePayload),
+    );
+  }
   if (method === "POST" && path === "/resolve") {
     return withBody(req, res, (b) => {
       const a = JSON.parse(b) as Pick<Annotation, "target">;
@@ -187,17 +221,11 @@ async function handleRequest(
     return handleDeleteReference(res, config, decodeURIComponent(referenceDeletePost[1]!));
   }
 
-  // POST /annotations/:id/comments
-  const comment = path.match(/^\/annotations\/([^/]+)\/comments$/);
-  if (method === "POST" && comment) {
-    return withBody(req, res, (b) => handleComment(config, comment[1]!, JSON.parse(b)));
-  }
-
   // POST /annotations/:id/update
   const annotationUpdate = path.match(/^\/annotations\/([^/]+)\/update$/);
   if (method === "POST" && annotationUpdate) {
     return withBody(req, res, (b) =>
-      handleUpdateAnnotation(config, annotationUpdate[1]!, JSON.parse(b) as { note?: string }),
+      handleUpdateAnnotation(config, annotationUpdate[1]!, JSON.parse(b) as { note?: string; status?: unknown }),
     );
   }
 
@@ -206,6 +234,14 @@ async function handleRequest(
   if (method === "POST" && annotationMove) {
     return withBody(req, res, (b) =>
       handleMoveAnnotation(config, annotationMove[1]!, JSON.parse(b) as { group?: string }),
+    );
+  }
+
+  // POST /annotations/:id/run  { action }
+  const annotationRun = path.match(/^\/annotations\/([^/]+)\/run$/);
+  if (method === "POST" && annotationRun) {
+    return withBody(req, res, (b) =>
+      handleAnnotationRun(config, resolver, registry, annotationRun[1]!, JSON.parse(b) as { action: string }),
     );
   }
 
@@ -241,6 +277,12 @@ async function handleRequest(
     );
   }
 
+  // POST /groups/:slug/resolve
+  const groupResolve = path.match(/^\/groups\/([^/]+)\/resolve$/);
+  if (method === "POST" && groupResolve) {
+    return handleResolveGroup(res, config, decodeURIComponent(groupResolve[1]!));
+  }
+
   return json(res, 404, { error: "not found" });
 }
 
@@ -253,18 +295,24 @@ async function contextForRequest(
   contexts: Map<string, Promise<ProjectContext>>,
   pageUrl: string | undefined,
   repoRoot: string | undefined,
+  codexLaunchMode: CodexLaunchMode | undefined,
 ): Promise<ProjectContext> {
   const project = projectForRequest(baseConfig, pageUrl, repoRoot);
   const root = resolve(project.repoRoot);
-  let ctx = contexts.get(root);
+  const key = `${root}\0${codexLaunchMode ?? ""}`;
+  let ctx = contexts.get(key);
   if (!ctx) {
-    ctx = buildProjectContext(baseConfig, project);
-    contexts.set(root, ctx);
+    ctx = buildProjectContext(baseConfig, project, codexLaunchMode);
+    contexts.set(key, ctx);
   }
   return ctx;
 }
 
-async function buildProjectContext(baseConfig: BridgeConfig, project: RegisteredProject): Promise<ProjectContext> {
+async function buildProjectContext(
+  baseConfig: BridgeConfig,
+  project: RegisteredProject,
+  codexLaunchMode: CodexLaunchMode | undefined,
+): Promise<ProjectContext> {
   const fileConfig = loadConfig({ repoRoot: project.repoRoot });
   const config: BridgeConfig = {
     ...fileConfig,
@@ -277,6 +325,7 @@ async function buildProjectContext(baseConfig: BridgeConfig, project: Registered
       ...(project.framework ? { framework: project.framework } : {}),
     },
   };
+  applyCodexLaunchMode(config, codexLaunchMode);
   const registry = await ActionRegistry.build(config);
   console.log(`[loupe] project ready: ${config.project?.name ?? basename(config.repoRoot)} → ${config.repoRoot}`);
   return {
@@ -284,6 +333,24 @@ async function buildProjectContext(baseConfig: BridgeConfig, project: Registered
     resolver: new Resolver(config.repoRoot),
     registry,
   };
+}
+
+function applyCodexLaunchMode(config: BridgeConfig, mode: CodexLaunchMode | undefined): void {
+  if (!mode) return;
+  config.agents = { ...config.agents };
+  if (mode === "url-handler") {
+    config.agents.codex = codexUrlHandlerAgent();
+    return;
+  }
+  const current = config.agents.codex;
+  if (!current || current.mode === "codex-app" || current.mode === "codex-app-server") {
+    config.agents.codex = codexBackgroundAgent();
+  }
+}
+
+function parseCodexLaunchMode(value: string | null): CodexLaunchMode | undefined {
+  if (value === "background" || value === "url-handler") return value;
+  return undefined;
 }
 
 function projectForRequest(
@@ -368,6 +435,48 @@ async function handleAnnotate(
   };
 }
 
+async function handleRecord(
+  config: BridgeConfig,
+  resolver: Resolver,
+  registry: ActionRegistry,
+  payload: AnnotatePayload,
+) {
+  const { annotation, actions } = payload;
+  if (!annotation?.id) throw new Error("missing annotation");
+  if (annotation.kind !== "recording" || !annotation.recording) throw new Error("missing recording payload");
+
+  // A recording has no single element target; resolve best-effort for parity.
+  const resolution = resolver.resolve(annotation.target);
+  const bundle = writeRecordingBundle(config.repoRoot, annotation, resolution);
+
+  const results: Record<string, ActionOutcome> = {};
+  for (const id of actionsWithSave(actions ?? [])) {
+    const action = registry.get(id);
+    if (!action) {
+      results[id] = { ok: false, detail: `unknown action "${id}"` };
+      continue;
+    }
+    try {
+      results[id] = await action.run({ annotation, bundle, resolution, config });
+    } catch (e) {
+      results[id] = { ok: false, detail: String(e) };
+    }
+  }
+
+  const ran = Object.entries(results)
+    .map(([id, r]) => `${id}:${r.ok ? "ok" : "fail"}`)
+    .join(" ");
+  console.log(`[loupe] recording ${bundle.dir}${ran ? ` · ${ran}` : ""}`);
+
+  return {
+    id: bundle.id,
+    dir: bundle.dir,
+    source: resolution.primary ?? null,
+    method: resolution.method,
+    results,
+  };
+}
+
 function handleDeleteAnnotation(res: ServerResponse, config: BridgeConfig, id: string): void {
   const ok = deleteAnnotation(config.repoRoot, id);
   if (!ok) return json(res, 404, { ok: false, error: `annotation ${id} not found` });
@@ -406,11 +515,15 @@ function handleDeleteReferencesForPage(config: BridgeConfig, body: { url?: strin
 function handleUpdateAnnotation(
   config: BridgeConfig,
   id: string,
-  body: { note?: string },
+  body: { note?: string; status?: unknown },
 ): { ok: true } {
-  const ok = updateAnnotation(config.repoRoot, id, { note: body.note ?? "" });
+  const status = parseStatus(body.status);
+  const ok = updateAnnotation(config.repoRoot, id, {
+    ...(body.note !== undefined ? { note: body.note } : {}),
+    ...(status ? { status } : {}),
+  });
   if (!ok) throw new Error(`annotation ${id} not found`);
-  console.log(`[loupe] updated annotation ${id}`);
+  console.log(`[loupe] updated annotation ${id}${status ? ` → ${status}` : ""}`);
   return { ok: true };
 }
 
@@ -458,25 +571,53 @@ function handleRenameGroup(config: BridgeConfig, slug: string, body: { group?: s
   return { ok: true, count };
 }
 
+async function handleAnnotationRun(
+  config: BridgeConfig,
+  resolver: Resolver,
+  registry: ActionRegistry,
+  id: string,
+  body: { action: string },
+) {
+  const actionId = body.action?.trim();
+  if (!actionId) throw new Error("missing action");
+  const annotation = listAnnotations(config.repoRoot).find((a) => a.id === id);
+  if (!annotation) throw new Error(`annotation ${id} not found`);
+  const action = registry.get(actionId);
+  if (!action) throw new Error(`unknown action "${actionId}"`);
+
+  const bundle = bundleFromStoredAnnotation(config.repoRoot, annotation);
+  const resolution = (annotation as StoredAnnotation & { resolution?: SourceResolution }).resolution ?? resolver.resolve(annotation.target);
+  const outcome = await action.run({ annotation, bundle, resolution, config });
+  console.log(`[loupe] annotation "${id}" → ${actionId}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
+  return { ok: outcome.ok, action: actionId, count: 1, detail: outcome.detail, url: outcome.url };
+}
+
+function bundleFromStoredAnnotation(repoRoot: string, annotation: StoredAnnotation): WrittenBundle {
+  const absDir = resolve(repoRoot, annotation.dir);
+  const screenshot = join(absDir, "shot.png");
+  const references = (annotation.references ?? [])
+    .map((reference) => reference.file ? join(absDir, reference.file) : undefined)
+    .filter((path): path is string => Boolean(path && existsSync(path)));
+  return {
+    id: annotation.id,
+    dir: annotation.dir,
+    absDir,
+    ...(existsSync(screenshot) ? { screenshot } : {}),
+    references,
+    keyframes: [],
+  };
+}
+
 function actionsWithSave(actions: string[]): string[] {
   const ids = actions.filter((id) => id !== "copy-reference");
   if (ids.length === 0 || ids.includes("save")) return [...new Set(ids)];
   return ["save", ...new Set(ids)];
 }
 
-function handleComment(config: BridgeConfig, id: string, body: Partial<AnnotationComment>) {
-  if (!body.body) throw new Error("missing comment body");
-  const status = parseStatus(body.status);
-  const comment: AnnotationComment = {
-    author: commentAuthor(config.repoRoot, body.author),
-    body: body.body,
-    createdAt: body.createdAt || new Date().toISOString(),
-    ...(status ? { status } : {}),
-  };
-  const ok = appendComment(config.repoRoot, id, comment);
-  if (!ok) throw new Error(`annotation ${id} not found`);
-  console.log(`[loupe] comment on ${id} by ${comment.author}${comment.status ? ` → ${comment.status}` : ""}`);
-  return { ok: true };
+function handleResolveGroup(res: ServerResponse, config: BridgeConfig, slug: string): void {
+  const count = resolveGroup(config.repoRoot, slug);
+  console.log(`[loupe] resolved ${count} annotation${count === 1 ? "" : "s"} in group "${slug}"`);
+  return json(res, 200, { ok: true, count });
 }
 
 function parseStatus(value: unknown): AnnotationStatus | undefined {
@@ -484,12 +625,6 @@ function parseStatus(value: unknown): AnnotationStatus | undefined {
   if (value === "needs-review") return "needs_review";
   if (value === "open" || value === "needs_review" || value === "resolved") return value;
   throw new Error("status must be open, needs_review, or resolved");
-}
-
-function commentAuthor(repoRoot: string, author: string | undefined): string {
-  const trimmed = author?.trim();
-  if (!trimmed || trimmed === "me" || trimmed === "anon") return gitUserName(repoRoot);
-  return trimmed;
 }
 
 async function handleGroupRun(
@@ -540,6 +675,7 @@ function serveFile(res: ServerResponse, repoRoot: string, rel: string): void {
     ".webp": "image/webp",
     ".gif": "image/gif",
     ".svg": "image/svg+xml",
+    ".webm": "video/webm",
   };
   res.writeHead(200, { "content-type": types[extname(abs).toLowerCase()] ?? "application/octet-stream" });
   res.end(readFileSync(abs));

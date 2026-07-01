@@ -40,6 +40,13 @@ export interface AnnotationTarget {
   className: string;
   /** Component ancestry, innermost first. Empty if no supported framework was found. */
   componentChain: ComponentRef[];
+  /**
+   * The anchor element's own bounding rect (viewport CSS pixels) at capture
+   * time. Lets a viewer re-anchor the annotation to the live element — the
+   * drawn selection's offset within this rect is layout-invariant, so pins can
+   * follow the element through scroll, reflow, and responsive layout changes.
+   */
+  elementRect?: Rect;
 }
 
 /** A computed suggestion chip offered to the user before they write a note. */
@@ -60,6 +67,94 @@ export type SuggestionKind =
   | "contrast"
   | "radius"
   | "size";
+
+/** One console call captured while a flow recording is running. */
+export interface ConsoleEntry {
+  level: "log" | "info" | "warn" | "error" | "debug";
+  /** Flattened, stringified arguments. */
+  text: string;
+  /** Milliseconds since the recording started. */
+  t: number;
+}
+
+/** One fetch/XHR request observed while a flow recording is running. */
+export interface NetworkEntry {
+  method: string;
+  url: string;
+  /** Response status, when the request completed. */
+  status?: number;
+  ok?: boolean;
+  /** Round-trip duration in milliseconds. */
+  durationMs?: number;
+  /** "fetch" or "xhr". */
+  kind: "fetch" | "xhr";
+  /** Network/exception message when the request never completed. */
+  error?: string;
+  /** Milliseconds since the recording started. */
+  t: number;
+}
+
+/** One uncaught error or unhandled rejection during a flow recording. */
+export interface PageErrorEntry {
+  kind: "error" | "unhandledrejection";
+  message: string;
+  stack?: string;
+  /** Milliseconds since the recording started. */
+  t: number;
+}
+
+/** One user interaction timestamp captured during a flow recording. */
+export interface RecordingEventMarker {
+  kind: "click" | "typing-start" | "typing-settled" | "key";
+  /** Milliseconds since the recording started. */
+  t: number;
+  /** Short human label for the event, e.g. "click button Save". */
+  label: string;
+  /** Event coordinates in viewport CSS pixels, when pointer-based. */
+  x?: number;
+  y?: number;
+  /** Keyboard key for non-text key events. */
+  key?: string;
+  /** Best-effort selector for the event target. */
+  selector?: string;
+  /** Best-effort target text/value summary. */
+  text?: string;
+}
+
+/** A still PNG extracted from the recording video at an interaction timestamp. */
+export interface RecordingKeyframe {
+  /** Milliseconds into the flow represented by this image. */
+  t: number;
+  /** Human label explaining what interaction caused the frame. */
+  label: string;
+  /** The source event timestamp, when the frame is offset slightly after it. */
+  eventT?: number;
+  /** base64 data URL before persistence; omitted from saved metadata. */
+  dataUrl?: string;
+  /** File path within the recording bundle after persistence. */
+  file?: string;
+}
+
+/**
+ * Everything captured during a flow recording: the screen video plus the
+ * console output, network activity, and errors that happened alongside it, so an
+ * agent can diagnose the flow from the machine-readable logs, not just the video.
+ */
+export interface RecordingCapture {
+  /** ISO-8601 time the recording started. */
+  startedAt: string;
+  /** Total recording length in milliseconds. */
+  durationMs: number;
+  /** base64 `data:video/webm` URL of the captured tab (set by the offscreen recorder). */
+  videoDataUrl?: string;
+  console: ConsoleEntry[];
+  network: NetworkEntry[];
+  errors: PageErrorEntry[];
+  /** User interaction timeline used to correlate logs/video/keyframes. */
+  events?: RecordingEventMarker[];
+  /** PNG stills extracted from the final video at important interaction times. */
+  keyframes?: RecordingKeyframe[];
+}
 
 /**
  * A complete annotation. The screenshot is attached by the extension as a base64
@@ -98,16 +193,17 @@ export interface Annotation {
    * an agent as a unit without mixing with unrelated work. Empty = "inbox".
    */
   group?: string;
-  /** Lifecycle, advanced by the agent/teammate via comments. */
+  /** Lifecycle, advanced by the agent/teammate via status updates. */
   status?: AnnotationStatus;
-  /**
-   * Thread of follow-ups. The agent appends here when it implements the change
-   * and moves it to needs_review; teammates can reply or resolve it. Populated
-   * when reading a bundle.
-   */
-  comments?: AnnotationComment[];
   /** base64 PNG data URL of the cropped screenshot (set by the background SW). */
   screenshotDataUrl?: string;
+  /**
+   * What kind of capture this is. "region" (default) is the classic drag-select
+   * annotation; "recording" is a flow recording that carries a {@link RecordingCapture}.
+   */
+  kind?: "region" | "recording";
+  /** Flow recording payload — present only when `kind` is "recording". */
+  recording?: RecordingCapture;
 }
 
 export type AnnotationStatus = "open" | "needs_review" | "resolved";
@@ -120,18 +216,6 @@ export interface AnnotationReference {
   dataUrl?: string;
   /** Filename within the bundle's refs/ dir (set by the bridge). */
   file?: string;
-}
-
-/** One follow-up on an annotation (from an agent or a person). */
-export interface AnnotationComment {
-  /** Who wrote it, e.g. "agent:claude" or a display name. */
-  author: string;
-  /** Markdown body. */
-  body: string;
-  /** ISO-8601 time. */
-  createdAt: string;
-  /** Optional status this comment moves the annotation to. */
-  status?: AnnotationStatus;
 }
 
 /**

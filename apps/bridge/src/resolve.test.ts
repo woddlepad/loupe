@@ -17,6 +17,19 @@ function repoWithComponent(): string {
   return root;
 }
 
+function repoWithVueComponents(): string {
+  const root = mkdtempSync(join(tmpdir(), "loupe-vue-test-"));
+  const dir = join(root, "src/components");
+  mkdirSync(dir, { recursive: true });
+  // A Vue SFC declares no `function TodoList` in its body — it is identified by
+  // filename. Vuetify library components (VBtn, VCard) never live in the repo.
+  writeFileSync(
+    join(dir, "TodoList.vue"),
+    `<script setup>\nimport { ref } from "vue";\nconst items = ref([]);\n</script>\n<template>\n  <v-card><v-btn>Add</v-btn></v-card>\n</template>\n`,
+  );
+  return root;
+}
+
 function target(partial: Partial<AnnotationTarget>): AnnotationTarget {
   return {
     tag: "button",
@@ -42,6 +55,22 @@ test("returns method 'none' when nothing matches", () => {
   assert.equal(res.method, "none");
   assert.equal(res.primary, undefined);
   assert.deepEqual(res.candidates, []);
+});
+
+test("resolves a Vue SFC by filename when Vuetify library components lead the chain", () => {
+  const r = new Resolver(repoWithVueComponents());
+  // The overlay reports the innermost Vuetify components first, then the user's.
+  const res = r.resolve(
+    target({
+      componentChain: [
+        { name: "VBtn", framework: "vue" },
+        { name: "VCard", framework: "vue" },
+        { name: "TodoList", framework: "vue" },
+      ],
+    }),
+  );
+  assert.equal(res.method, "filename");
+  assert.match(res.primary ?? "", /TodoList\.vue$/);
 });
 
 test("ignores lowercase/host element names (not components)", () => {

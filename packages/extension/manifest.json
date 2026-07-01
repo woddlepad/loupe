@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "minimum_chrome_version": "120",
   "description": "Drag-select a region, identify the component, attach a note, hand it to an agent.",
-  "permissions": ["activeTab", "clipboardWrite", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "clipboardWrite", "offscreen", "scripting", "storage", "tabCapture", "tabs"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -36,5 +36,11 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["fonts/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

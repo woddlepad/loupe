@@ -2,18 +2,22 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import type { ActionDescriptor, AnnotationStatus } from "@loupe/core/model";
 import {
+  ArrowLeft,
   ArrowUp,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  Crop,
   ExternalLink,
   Eye,
   EyeOff,
   GripVertical,
   ImagePlus,
   Library,
-  MessageSquare,
+  Minus,
   MoreHorizontal,
-  PanelRightClose,
+  MousePointer,
   Pencil,
   Plus,
   Search,
@@ -25,20 +29,28 @@ import type {
   GroupSummary,
   ListResult,
   LoupeMessage,
+  RecordingsResult,
   ReferenceImageResult,
   ReferenceItem,
   ReferencesResult,
   SimpleResult,
   StoredAnnotation,
 } from "./messages.js";
-import { bridgeUrlForUrl, loadSettings } from "./settings.js";
+import { bridgeUrlForUrl, enabledActions, loadSettings } from "./settings.js";
 import {
   Badge,
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
+  PortalContainerProvider,
+  Spinner,
   Textarea,
-} from "./ui.js";
-import { cn } from "./lib/cn.js";
+  cn,
+} from "@loupe/ui";
 
 const CLAUDE_LOGO_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" preserveAspectRatio="xMidYMid" viewBox="0 0 256 257"><path fill="currentColor" d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"/></svg>';
@@ -48,20 +60,82 @@ const OPENAI_LOGO_SVG =
 
 const GITHUB_REPO_URL = "https://github.com/woddlepad/loupe";
 
+/** Loupe brand mark — a magnifying glass with a lens highlight, matching the
+ * extension icon. Distinct from the plain lucide `Search` glyph. */
+const LOUPE_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2"/><path d="M7.3 8.6a3.8 3.8 0 0 1 2.6-2.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="m15.4 15.4 5.1 5.1" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+
 const GITHUB_LOGO_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.02c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.48 11.48 0 0 1 6.01 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.8 5.63-5.48 5.93.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5Z"/></svg>';
+
+const PI_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M4 6h16v2h-3v10h-2V8H9v10H7V8H4z"/></svg>';
+
+// GitHub Copilot mark (via svgl.app).
+const COPILOT_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" preserveAspectRatio="xMidYMid" viewBox="0 0 256 208"><path fill="currentColor" d="M205.3 31.4c14 14.8 20 35.2 22.5 63.6 6.6 0 12.8 1.5 17 7.2l7.8 10.6c2.2 3 3.4 6.6 3.4 10.4v28.7a12 12 0 0 1-4.8 9.5C215.9 187.2 172.3 208 128 208c-49 0-98.2-28.3-123.2-46.6a12 12 0 0 1-4.8-9.5v-28.7c0-3.8 1.2-7.4 3.4-10.5l7.8-10.5c4.2-5.7 10.4-7.2 17-7.2 2.5-28.4 8.4-48.8 22.5-63.6C77.3 3.2 112.6 0 127.6 0h.4c14.7 0 50.4 2.9 77.3 31.4ZM128 78.7c-3 0-6.5.2-10.3.6a27.1 27.1 0 0 1-6 12.1 45 45 0 0 1-32 13c-6.8 0-13.9-1.5-19.7-5.2-5.5 1.9-10.8 4.5-11.2 11-.5 12.2-.6 24.5-.6 36.8 0 6.1 0 12.3-.2 18.5 0 3.6 2.2 6.9 5.5 8.4C79.9 185.9 105 192 128 192s48-6 74.5-18.1a9.4 9.4 0 0 0 5.5-8.4c.3-18.4 0-37-.8-55.3-.4-6.6-5.7-9.1-11.2-11-5.8 3.7-13 5.1-19.7 5.1a45 45 0 0 1-32-12.9 27.1 27.1 0 0 1-6-12.1c-3.4-.4-6.9-.5-10.3-.6Zm-27 44c5.8 0 10.5 4.6 10.5 10.4v19.2a10.4 10.4 0 0 1-20.8 0V133c0-5.8 4.6-10.4 10.4-10.4Zm53.4 0c5.8 0 10.4 4.6 10.4 10.4v19.2a10.4 10.4 0 0 1-20.8 0V133c0-5.8 4.7-10.4 10.4-10.4Zm-73-94.4c-11.2 1.1-20.6 4.8-25.4 10-10.4 11.3-8.2 40.1-2.2 46.2A31.2 31.2 0 0 0 75 91.7c6.8 0 19.6-1.5 30.1-12.2 4.7-4.5 7.5-15.7 7.2-27-.3-9.1-2.9-16.7-6.7-19.9-4.2-3.6-13.6-5.2-24.2-4.3Zm69 4.3c-3.8 3.2-6.4 10.8-6.7 19.9-.3 11.3 2.5 22.5 7.2 27a41.7 41.7 0 0 0 30 12.2c8.9 0 17-2.9 21.3-7.2 6-6.1 8.2-34.9-2.2-46.3-4.8-5-14.2-8.8-25.4-9.9-10.6-1-20 .7-24.2 4.3ZM128 56c-2.6 0-5.6.2-9 .5.4 1.7.5 3.7.7 5.7 0 1.5 0 3-.2 4.5 3.2-.3 6-.3 8.5-.3 2.6 0 5.3 0 8.5.3-.2-1.6-.2-3-.2-4.5.2-2 .3-4 .7-5.7-3.4-.3-6.4-.5-9-.5Z"/></svg>';
+
+/** Whether the page pointer drives normal interaction ("select") or the
+ * drag-to-annotate overlay ("annotate"). */
+export type LoupeMode = "select" | "annotate";
+
+/** Imperative handle the content script uses to keep the toolbar in sync with
+ * the overlay (e.g. reset to "select" when the overlay is dismissed with Esc). */
+export interface ViewerApi {
+  setMode: (mode: LoupeMode) => void;
+}
 
 export interface ViewerAppProps {
   onClose: () => void;
   panelRoot?: HTMLElement | null;
   panelEmbedded?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
+  /** Reports the measured width of the minimized toolbar so the host iframe can
+   * shrink to fit it exactly (no dead space on the right). */
+  onCollapsedWidthChange?: (width: number) => void;
+  onModeChange?: (mode: LoupeMode) => void;
+  onReady?: (api: ViewerApi) => void;
 }
 
-type ViewerFilter = "review" | "page" | "all" | "library";
+type ViewerFilter = "review" | "page" | "all" | "library" | "recordings";
 
-export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, onCollapsedChange }: ViewerAppProps) {
+const VIEW_FILTER_SHORTCUTS: Record<string, ViewerFilter> = {
+  n: "review",
+  p: "page",
+  a: "all",
+  r: "recordings",
+  l: "library",
+};
+
+/** Segmented Select / Annotate switch. `compact` drops the labels for the
+ * minimized hovering toolbar. */
+function ModeToolbar({
+  mode,
+  onModeChange,
+  compact = false,
+}: {
+  mode: LoupeMode;
+  onModeChange: (mode: LoupeMode) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div data-loupe-panel-no-drag="" className="inline-flex items-center gap-0.5 rounded-lg border border-loupe-line bg-loupe-bg/60 p-0.5">
+      <Button size="xs" variant={mode === "select" ? "default" : "ghost"} title="Select mode — interact with the page" onClick={() => onModeChange("select")}>
+        <MousePointer className="h-3.5 w-3.5" />
+        {compact ? null : "Select"}
+      </Button>
+      <Button size="xs" variant={mode === "annotate" ? "default" : "ghost"} title="Annotation mode — drag to add annotations" onClick={() => onModeChange("annotate")}>
+        <Crop className="h-3.5 w-3.5" />
+        {compact ? null : "Annotate"}
+      </Button>
+    </div>
+  );
+}
+
+export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, onCollapsedChange, onCollapsedWidthChange, onModeChange, onReady }: ViewerAppProps) {
+  const [mode, setMode] = React.useState<LoupeMode>("select");
   const [annotations, setAnnotations] = React.useState<StoredAnnotation[]>([]);
+  const [recordings, setRecordings] = React.useState<StoredAnnotation[]>([]);
   const [references, setReferences] = React.useState<ReferenceItem[]>([]);
   const [actions, setActions] = React.useState<ActionDescriptor[]>([]);
   const [groups, setGroups] = React.useState<GroupSummary[]>([]);
@@ -69,6 +143,8 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
   const [bridgeUrl, setBridgeUrl] = React.useState("http://localhost:7337");
   const [repoRoot, setRepoRoot] = React.useState<string | undefined>(undefined);
   const [filter, setFilter] = React.useState<ViewerFilter>("review");
+  const [query, setQuery] = React.useState("");
+  const [viewMenuOpen, setViewMenuOpen] = React.useState(false);
   const [showResolved, setShowResolved] = React.useState(false);
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [collapsed, setCollapsed] = React.useState(false);
@@ -78,8 +154,25 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
   const [dragOverGroup, setDragOverGroup] = React.useState<string | null>(null);
   const [draggingGroupSlug, setDraggingGroupSlug] = React.useState<string | null>(null);
   const [previewGroupOrder, setPreviewGroupOrder] = React.useState<string[] | null>(null);
+  // True while a drop is committing, so the trailing `dragend` cancel doesn't
+  // clear the preview order out from under the in-flight reorder.
+  const committingGroupOrderRef = React.useRef(false);
   const [lightbox, setLightbox] = React.useState<string | null>(null);
   const [, forceLayout] = React.useReducer((n: number) => n + 1, 0);
+  const collapsedRef = React.useRef<HTMLDivElement>(null);
+
+  // Measure the minimized toolbar and report its width so the host iframe can
+  // fit it exactly instead of leaving empty space to the right.
+  React.useLayoutEffect(() => {
+    if (!collapsed || !panelEmbedded || !onCollapsedWidthChange) return;
+    const el = collapsedRef.current;
+    if (!el) return;
+    const report = () => onCollapsedWidthChange(Math.ceil(el.getBoundingClientRect().width));
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [collapsed, panelEmbedded, onCollapsedWidthChange]);
 
   React.useEffect(() => {
     onCollapsedChange?.(collapsed);
@@ -96,17 +189,36 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     [onCollapsedChange],
   );
 
+  const changeMode = React.useCallback(
+    (next: LoupeMode) => {
+      setMode(next);
+      onModeChange?.(next);
+      // Annotation mode hands the pointer to the drag-select overlay, so shrink
+      // the panel down to the hovering toolbar while the user marks up the page.
+      if (next === "annotate") setViewerCollapsed(true);
+    },
+    [onModeChange, setViewerCollapsed],
+  );
+
+  // Let the content script drive the toolbar back to "select" when the overlay
+  // is dismissed outside the panel (Esc, toggle command, submit).
+  React.useEffect(() => {
+    onReady?.({ setMode: (next) => setMode(next) });
+  }, [onReady]);
+
   const reload = React.useCallback(async () => {
-    const [list, referenceList, actionList, groupList, settings] = await Promise.all([
+    const [list, recordingList, referenceList, actionList, groupList, settings] = await Promise.all([
       chrome.runtime.sendMessage({ type: "list" } satisfies LoupeMessage) as Promise<ListResult>,
+      chrome.runtime.sendMessage({ type: "recordings" } satisfies LoupeMessage) as Promise<RecordingsResult>,
       chrome.runtime.sendMessage({ type: "references" } satisfies LoupeMessage) as Promise<ReferencesResult>,
       fetchActions(),
       fetchGroups(),
       loadSettings(),
     ]);
     setAnnotations(list.ok ? list.annotations : []);
+    setRecordings(recordingList.ok ? recordingList.recordings : []);
     setReferences(referenceList.ok ? referenceList.references : []);
-    setActions(actionList);
+    setActions(enabledActions(actionList, settings));
     setGroups(groupList);
     setAuthor(settings.author);
     setBridgeUrl(bridgeUrlForUrl(settings, location.href));
@@ -133,12 +245,33 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
       if (eventPathHasAttribute(e, "data-loupe-library-popover")) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (lightbox) setLightbox(null);
+      if (viewMenuOpen) setViewMenuOpen(false);
+      else if (lightbox) setLightbox(null);
+      // In annotate mode Esc hands back to Select (disabling the drag-select
+      // overlay) rather than tearing down the whole viewer.
+      else if (mode === "annotate") changeMode("select");
       else onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [lightbox, onClose]);
+  }, [lightbox, onClose, viewMenuOpen, mode, changeMode]);
+
+  React.useEffect(() => {
+    const targetWindows = uniqueWindows([window, panelRoot?.ownerDocument.defaultView ?? null]);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || collapsed || lightbox || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing) return;
+      if (isTextEntryTarget(e.target)) return;
+      const nextFilter = VIEW_FILTER_SHORTCUTS[e.key.toLowerCase()];
+      if (!nextFilter) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setFilter(nextFilter);
+      setExpanded(null);
+      setViewMenuOpen(false);
+    };
+    targetWindows.forEach((targetWindow) => targetWindow.addEventListener("keydown", onKey, true));
+    return () => targetWindows.forEach((targetWindow) => targetWindow.removeEventListener("keydown", onKey, true));
+  }, [collapsed, lightbox, panelRoot]);
 
   const pageAnnotations = React.useMemo(() => {
     const here = pageKey(location.href);
@@ -154,13 +287,15 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
   }, [annotations, filter, pageAnnotations, reviewAnnotations]);
 
   const visible = React.useMemo(() => {
+    const q = normalizeSearch(query);
     const base = showResolved ? scoped : scoped.filter((a) => a.status !== "resolved");
     return base.filter((a) => {
       const slug = a.groupSlug || groupSlugFor(a.group);
       if (hiddenGroups.has(slug)) return false;
-      return !focusedGroup || slug === focusedGroup;
+      if (focusedGroup && slug !== focusedGroup) return false;
+      return !q || annotationMatches(a, q);
     });
-  }, [focusedGroup, hiddenGroups, scoped, showResolved]);
+  }, [focusedGroup, hiddenGroups, query, scoped, showResolved]);
 
   const pageCount = React.useMemo(
     () => (showResolved ? pageAnnotations.length : pageAnnotations.filter((a) => a.status !== "resolved").length),
@@ -174,13 +309,34 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     [annotations, showResolved],
   );
   const libraryCount = references.length;
+  const recordingCount = recordings.length;
 
   const allResolvedCount = annotations.filter((a) => a.status === "resolved").length;
   const scopedResolvedCount = scoped.filter((a) => a.status === "resolved").length;
+  const viewOptions = React.useMemo<ViewerFilterOption[]>(
+    () => [
+      { value: "review", label: "Needs review", count: reviewCount, shortcut: "N" },
+      { value: "page", label: "This page", count: pageCount, shortcut: "P" },
+      { value: "all", label: "All pages", count: allCount, shortcut: "A" },
+      { value: "recordings", label: "Recordings", count: recordingCount, shortcut: "R" },
+      { value: "library", label: "Library", count: libraryCount, shortcut: "L" },
+    ],
+    [allCount, libraryCount, pageCount, recordingCount, reviewCount],
+  );
+  const selectedView = viewOptions.find((option) => option.value === filter) ?? viewOptions[0]!;
   const active = expanded ? annotations.find((a) => a.id === expanded) : undefined;
+  const searching = normalizeSearch(query).length > 0;
   const baseGroupRows = React.useMemo(
-    () => groupsForViewer(visible, groups).filter((row) => !hiddenGroups.has(row.slug) && (!focusedGroup || row.slug === focusedGroup)),
-    [focusedGroup, hiddenGroups, visible, groups],
+    () =>
+      groupsForViewer(visible, groups).filter(
+        (row) =>
+          !hiddenGroups.has(row.slug) &&
+          (!focusedGroup || row.slug === focusedGroup) &&
+          // While searching, drop groups with no matching annotations so empty
+          // "drop here" shells don't clutter the results.
+          (!searching || row.items.length > 0),
+      ),
+    [focusedGroup, hiddenGroups, searching, visible, groups],
   );
   const groupRows = React.useMemo(() => orderGroupRows(baseGroupRows, previewGroupOrder), [baseGroupRows, previewGroupOrder]);
   const groupVisibilityActive = focusedGroup !== null || hiddenGroups.size > 0;
@@ -240,6 +396,9 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
       setDragOverGroup(target);
     },
     cancelGroupReorder: () => {
+      // A drop commit is in progress (dragend fires right after drop); leave the
+      // committed preview order in place so the rows don't snap back.
+      if (committingGroupOrderRef.current) return;
       setDraggingGroupSlug(null);
       setPreviewGroupOrder(null);
       setDragOverGroup(null);
@@ -258,11 +417,24 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
     },
     commitGroupReorder: async (slugs) => {
       setDraggingGroupSlug(null);
-      setPreviewGroupOrder(null);
       setDragOverGroup(null);
-      if (sameStringArray(slugs, baseGroupRows.map((row) => row.slug))) return;
-      const r = (await chrome.runtime.sendMessage({ type: "reorder-groups", slugs } satisfies LoupeMessage)) as SimpleResult;
-      if (r.ok) await reload();
+      if (sameStringArray(slugs, baseGroupRows.map((row) => row.slug))) {
+        setPreviewGroupOrder(null);
+        return;
+      }
+      committingGroupOrderRef.current = true;
+      // Pin the dropped order until `groups` is refreshed to match, so the rows
+      // never revert to the stale server order and re-animate. Clearing the
+      // preview only after reload keeps the rendered order identical across the
+      // handoff, so the FLIP effect sees no change.
+      setPreviewGroupOrder(slugs);
+      try {
+        const r = (await chrome.runtime.sendMessage({ type: "reorder-groups", slugs } satisfies LoupeMessage)) as SimpleResult;
+        if (r.ok) await reload();
+      } finally {
+        setPreviewGroupOrder(null);
+        committingGroupOrderRef.current = false;
+      }
     },
     reload,
   };
@@ -270,39 +442,61 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
   const panel = (
     <>
       {collapsed ? (
-        <button
-          type="button"
+        <div
+          ref={collapsedRef}
+          data-loupe-panel-drag=""
           className={cn(
-            "flex h-12 items-center gap-2 rounded-xl border border-loupe-line bg-loupe-panel/95 px-2 text-loupe-fg shadow-2xl shadow-black/50 transition-all hover:border-loupe-line-strong active:scale-[0.98]",
-            panelEmbedded ? "w-full" : "fixed right-3 top-3 z-[2147483646]",
+            "flex h-12 w-fit items-center gap-1.5 rounded-xl border border-loupe-line bg-loupe-panel/95 px-1.5 text-loupe-fg shadow-2xl shadow-black/50",
+            panelEmbedded ? "cursor-grab active:cursor-grabbing" : "fixed right-3 top-3 z-[2147483646]",
           )}
-          onClick={() => setViewerCollapsed(false)}
-          title="Show annotations"
         >
-          <Logo />
-          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-loupe-accent px-1.5 text-[11px] font-semibold text-loupe-bg">
-            {visible.length}
-          </span>
-        </button>
+          <button
+            type="button"
+            data-loupe-panel-no-drag=""
+            className="flex items-center gap-1.5 rounded-lg px-1 py-1 transition-colors hover:bg-white/5"
+            onClick={() => setViewerCollapsed(false)}
+            title="Show annotations"
+          >
+            <Logo />
+            <span className="grid h-5 min-w-5 place-items-center rounded-full bg-loupe-accent px-1.5 text-[11px] font-semibold text-loupe-bg">
+              {visible.length}
+            </span>
+          </button>
+          <ModeToolbar mode={mode} onModeChange={changeMode} compact />
+        </div>
       ) : (
         <section
           className={cn(
-            "flex flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel/95 text-[13px] text-loupe-fg shadow-2xl shadow-black/50",
+            "relative flex flex-col overflow-hidden rounded-2xl border border-loupe-line bg-loupe-panel/95 text-[13px] text-loupe-fg shadow-2xl shadow-black/50",
             panelEmbedded ? "h-full w-full" : "fixed bottom-3 right-3 top-3 z-[2147483646] w-[420px]",
           )}
         >
-          <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-loupe-line px-3 py-2">
-            <div className="flex items-center gap-1 rounded-xl border border-loupe-line bg-loupe-bg/60 p-1">
-              <SegmentButton active={filter === "review"} count={reviewCount} onClick={() => setFilter("review")}>Needs review</SegmentButton>
-              <SegmentButton active={filter === "page"} count={pageCount} onClick={() => setFilter("page")}>This page</SegmentButton>
-              <SegmentButton active={filter === "all"} count={allCount} onClick={() => setFilter("all")}>All pages</SegmentButton>
-              <SegmentButton active={filter === "library"} count={libraryCount} onClick={() => setFilter("library")}>Library</SegmentButton>
+          {panelEmbedded ? <ResizeHandles /> : null}
+          <header
+            className="flex min-h-12 shrink-0 cursor-grab items-center gap-2 border-b border-loupe-line px-3 py-2 active:cursor-grabbing"
+            data-loupe-panel-drag=""
+          >
+            <div data-loupe-panel-no-drag="">
+              <ViewFilterSelect
+                options={viewOptions}
+                selected={selectedView}
+                value={filter}
+                open={viewMenuOpen}
+                onOpenChange={setViewMenuOpen}
+                onValueChange={(value) => {
+                  setFilter(value);
+                  setExpanded(null);
+                }}
+              />
             </div>
             <div className="ml-auto" />
-            <Button variant="ghost" size="icon" title="Collapse annotations" onClick={() => setViewerCollapsed(true)}>
-              <PanelRightClose className="h-4 w-4" />
+            <div data-loupe-panel-no-drag="">
+              <ModeToolbar mode={mode} onModeChange={changeMode} compact />
+            </div>
+            <Button data-loupe-panel-no-drag="" variant="ghost" size="icon-sm" title="Collapse annotations" onClick={() => setViewerCollapsed(true)}>
+              <Minus className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" title="Close annotations" onClick={onClose}>
+            <Button data-loupe-panel-no-drag="" variant="ghost" size="icon-sm" title="Close annotations" onClick={onClose}>
               <X className="h-4 w-4" />
             </Button>
           </header>
@@ -312,33 +506,48 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
               <span className="text-[11px] text-loupe-muted">References are sorted by capture date.</span>
               <span className="ml-auto text-[11px] text-loupe-faint">{references.length}</span>
             </div>
-          ) : (
+          ) : filter === "recordings" ? (
             <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
-              <Button variant="secondary" size="xs" onClick={() => {
-                setShowResolved((v) => !v);
-                if (showResolved && active?.status === "resolved") setExpanded(null);
-              }}>
-                {showResolved ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                {showResolved ? "Hide resolved" : "Show resolved"}
-              </Button>
-              {allResolvedCount > 0 ? (
-                <DeleteResolvedButton count={allResolvedCount} onDone={async () => {
-                  setExpanded(null);
-                  await reload();
-                }} />
-              ) : null}
-              {groupVisibilityActive ? (
-                <Button variant="secondary" size="xs" onClick={ctx.clearGroupVisibility}>
-                  <Eye className="h-3.5 w-3.5" />
-                  Show all groups
-                </Button>
-              ) : null}
-              <span className="ml-auto text-[11px] text-loupe-faint">{visible.length}/{scoped.length}</span>
+              <span className="text-[11px] text-loupe-muted">Flow recordings with console + network logs.</span>
+              <span className="ml-auto text-[11px] text-loupe-faint">{recordingCount}</span>
             </div>
-          )}
+          ) : !active ? (
+            <div className="flex shrink-0 items-center gap-2 border-b border-loupe-line/70 px-3 py-2.5">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-loupe-faint" />
+                <Input
+                  className="h-8 pl-8"
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search annotations"
+                />
+              </div>
+              <ListActionsMenu
+                visibleCount={visible.length}
+                scopedCount={scoped.length}
+                showResolved={showResolved}
+                onToggleResolved={() => setShowResolved((v) => !v)}
+                resolvedCount={allResolvedCount}
+                onDeleteResolved={async () => {
+                  const r = (await chrome.runtime.sendMessage({ type: "delete-resolved" } satisfies LoupeMessage)) as SimpleResult;
+                  if (r.ok) {
+                    setExpanded(null);
+                    await reload();
+                  }
+                }}
+                groupVisibilityActive={groupVisibilityActive}
+                onShowAllGroups={ctx.clearGroupVisibility}
+              />
+            </div>
+          ) : null}
 
           <div ref={listRef} className="flex-1 overflow-y-auto py-2">
-            {filter === "library" ? (
+            {active && filter !== "recordings" && filter !== "library" ? (
+              <AnnotationDetailScreen annotation={active} ctx={ctx} />
+            ) : filter === "recordings" ? (
+              <RecordingsTab recordings={recordings} ctx={ctx} />
+            ) : filter === "library" ? (
               <LibraryTab refs={references} ctx={ctx} />
             ) : groupRows.length === 0 ? (
               <div className="px-6 py-12 text-center text-[12px] text-loupe-faint">
@@ -351,7 +560,7 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
                 <AnnotationGroup key={row.slug} group={row.group} slug={row.slug} items={row.items} ctx={ctx} />
               ))
             )}
-            <AddGroupForm onDone={reload} />
+            {!active && filter !== "recordings" && filter !== "library" ? <AddGroupForm onDone={reload} /> : null}
           </div>
 
           <BrandFooter />
@@ -362,7 +571,9 @@ export function ViewerApp({ onClose, panelRoot = null, panelEmbedded = false, on
 
   return (
     <>
-      {panelRoot ? createPortal(panel, panelRoot) : panel}
+      {panelRoot
+        ? createPortal(<PortalContainerProvider value={panelRoot}>{panel}</PortalContainerProvider>, panelRoot)
+        : panel}
 
       <Pins annotations={annotations} showResolved={showResolved} expanded={expanded} setExpanded={setExpanded} setFilter={setFilter} setCollapsed={setViewerCollapsed} />
       {lightbox ? <Lightbox src={lightbox} onClose={() => setLightbox(null)} /> : null}
@@ -403,6 +614,98 @@ interface ViewerContext {
 
 type GroupDropPlacement = "before" | "after";
 
+interface ViewerFilterOption {
+  value: ViewerFilter;
+  label: string;
+  count: number;
+  shortcut: string;
+}
+
+function ViewFilterSelect({
+  options,
+  selected,
+  value,
+  open,
+  onOpenChange,
+  onValueChange,
+}: {
+  options: ViewerFilterOption[];
+  selected: ViewerFilterOption;
+  value: ViewerFilter;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onValueChange: (value: ViewerFilter) => void;
+}) {
+  return (
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Annotation view"
+          className="flex h-8 w-[190px] items-center justify-between gap-2 rounded-xl border border-loupe-line bg-loupe-bg/70 px-2.5 text-[12px] text-loupe-fg outline-none transition-colors hover:border-loupe-line-strong"
+        >
+          <ViewFilterLabel option={selected} />
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[220px]">
+        {options.map((option) => (
+          <DropdownMenuItem
+            key={option.value}
+            className={cn(option.value === value && "bg-foreground/5 text-foreground")}
+            onSelect={() => onValueChange(option.value)}
+          >
+            <span className="grid h-5 min-w-6 place-items-center rounded-md border border-loupe-line bg-white/10 px-1.5 text-[10px] font-semibold leading-none text-loupe-muted">
+              {option.count}
+            </span>
+            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            <span className="ml-auto w-4 text-right text-[10px] text-loupe-faint">{option.shortcut}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+const RESIZE_HANDLES: { dir: string; className: string }[] = [
+  { dir: "n", className: "left-3 right-3 top-0 h-1.5 cursor-ns-resize" },
+  { dir: "s", className: "left-3 right-3 bottom-0 h-1.5 cursor-ns-resize" },
+  { dir: "e", className: "top-3 bottom-3 right-0 w-1.5 cursor-ew-resize" },
+  { dir: "w", className: "top-3 bottom-3 left-0 w-1.5 cursor-ew-resize" },
+  { dir: "nw", className: "top-0 left-0 h-3 w-3 cursor-nwse-resize" },
+  { dir: "ne", className: "top-0 right-0 h-3 w-3 cursor-nesw-resize" },
+  { dir: "sw", className: "bottom-0 left-0 h-3 w-3 cursor-nesw-resize" },
+  { dir: "se", className: "bottom-0 right-0 h-3 w-3 cursor-nwse-resize" },
+];
+
+// Invisible drag targets on the panel edges/corners. The pointer math lives in
+// viewer.tsx (LoupeViewer), which resizes the host iframe on pointerdown.
+function ResizeHandles() {
+  return (
+    <>
+      {RESIZE_HANDLES.map((handle) => (
+        <div
+          key={handle.dir}
+          data-loupe-panel-no-drag=""
+          data-loupe-panel-resize={handle.dir}
+          className={cn("absolute z-[2147483647]", handle.className)}
+        />
+      ))}
+    </>
+  );
+}
+
+function ViewFilterLabel({ option }: { option: ViewerFilterOption }) {
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2">
+      <span className="grid h-4 min-w-4 place-items-center rounded-full bg-loupe-fg px-1 text-[10px] font-semibold leading-none text-loupe-bg">
+        {option.count}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+    </span>
+  );
+}
+
 function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: string; items: StoredAnnotation[]; ctx: ViewerContext }) {
   const open = items.filter((a) => a.status !== "resolved").length;
   const collapsed = ctx.collapsedGroups.has(slug);
@@ -424,6 +727,15 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
     } satisfies LoupeMessage)) as SimpleResult;
     setSendingAction(null);
     if (r.ok) setSentAction(actionId);
+  }
+
+  async function resolveAll() {
+    if (open === 0) return;
+    const r = (await chrome.runtime.sendMessage({ type: "resolve-group", slug } satisfies LoupeMessage)) as SimpleResult;
+    if (r.ok) {
+      if (ctx.expanded && items.some((a) => a.id === ctx.expanded)) ctx.setExpanded(null);
+      await ctx.reload();
+    }
   }
 
   return (
@@ -489,6 +801,7 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
           actions={sendable}
           disabled={sendingAction !== null}
           itemCount={items.length}
+          openCount={open}
           focused={ctx.focusedGroup === slug}
           sentAction={sentAction}
           sendingAction={sendingAction}
@@ -497,6 +810,7 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
           onFocus={() => ctx.focusGroup(slug)}
           onHide={() => ctx.hideGroup(slug)}
           onRename={() => setRenameOpen(true)}
+          onResolveAll={() => void resolveAll()}
           onSend={(actionId) => void sendGroup(actionId)}
         />
       </div>
@@ -517,9 +831,7 @@ function AnnotationGroup({ group, slug, items, ctx }: { group: string; slug: str
         <div className="space-y-1 px-2">
           {items.map((a) => <AnnotationRow key={a.id} annotation={a} ctx={ctx} />)}
           {items.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-loupe-line px-3 py-4 text-center text-[11px] text-loupe-faint">
-              Drop annotations here
-            </div>
+            <div className="px-3 py-2 text-[11px] text-loupe-faint">No annotations here yet</div>
           ) : null}
         </div>
       ) : null}
@@ -552,7 +864,7 @@ function AddGroupForm({ onDone }: { onDone: () => Promise<void> }) {
   return (
     <div className="mx-2 mt-3 border-t border-loupe-line/70 pt-2">
       {!open ? (
-        <Button type="button" variant="secondary" size="xs" className="w-full" onClick={() => setOpen(true)}>
+        <Button type="button" variant="outline" size="xs" className="w-full" onClick={() => setOpen(true)}>
           <Plus className="h-3.5 w-3.5" />
           Add group
         </Button>
@@ -566,9 +878,9 @@ function AddGroupForm({ onDone }: { onDone: () => Promise<void> }) {
         >
           <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
           <div className="mt-2 flex items-center justify-end gap-1.5">
-            <Button type="button" variant="secondary" size="xs" className="min-w-20" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit" variant="primary" size="xs" className="min-w-20" disabled={saving || !value.trim()}>
-              {saving ? "Adding..." : "OK"}
+            <Button type="button" variant="outline" size="xs" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="default" size="xs" loading={saving} disabled={!value.trim()}>
+              OK
             </Button>
           </div>
         </form>
@@ -628,9 +940,9 @@ function RenameGroupForm({
     >
       <Input autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder="Group name" />
       <div className="mt-2 flex items-center justify-end gap-1.5">
-        <Button type="button" variant="secondary" size="xs" className="min-w-20" onClick={() => onOpenChange(false)}>Cancel</Button>
-        <Button type="submit" variant="primary" size="xs" className="min-w-20" disabled={saving || !value.trim()}>
-          {saving ? "Saving..." : "Save"}
+        <Button type="button" variant="outline" size="xs" onClick={() => onOpenChange(false)}>Cancel</Button>
+        <Button type="submit" variant="default" size="xs" loading={saving} disabled={!value.trim()}>
+          Save
         </Button>
       </div>
     </form>
@@ -692,9 +1004,9 @@ function DeleteGroupConfirm({
       </div>
       {error ? <div className="mt-2 rounded-lg border border-red-400/25 bg-red-500/10 px-2 py-1.5 text-red-100">{error}</div> : null}
       <div className="mt-2 flex items-center justify-end gap-1.5">
-        <Button type="button" variant="secondary" size="xs" className="min-w-20" onClick={() => onOpenChange(false)}>Cancel</Button>
-        <Button type="button" variant="danger" size="xs" className="min-w-20" disabled={deleting} onClick={() => void deleteGroup()}>
-          {deleting ? "Deleting..." : "Delete"}
+        <Button type="button" variant="outline" size="xs" onClick={() => onOpenChange(false)}>Cancel</Button>
+        <Button type="button" variant="destructive" size="xs" loading={deleting} onClick={() => void deleteGroup()}>
+          Delete
         </Button>
       </div>
     </div>
@@ -707,6 +1019,7 @@ function GroupActionsMenu({
   disabled,
   focused,
   itemCount,
+  openCount,
   sentAction,
   sendingAction,
   onClearFocus,
@@ -714,6 +1027,7 @@ function GroupActionsMenu({
   onFocus,
   onHide,
   onRename,
+  onResolveAll,
   onSend,
 }: {
   actions: ActionDescriptor[];
@@ -721,6 +1035,7 @@ function GroupActionsMenu({
   disabled?: boolean;
   focused: boolean;
   itemCount: number;
+  openCount: number;
   sentAction: string | null;
   sendingAction: string | null;
   onClearFocus: () => void;
@@ -728,81 +1043,115 @@ function GroupActionsMenu({
   onFocus: () => void;
   onHide: () => void;
   onRename: () => void;
+  onResolveAll: () => void;
   onSend: (action: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
 
-  function choose(callback: () => void) {
-    setOpen(false);
-    callback();
-  }
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className={cn(
+            "opacity-70 transition-all hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100",
+            open && "opacity-100",
+            className,
+          )}
+          title="More group actions"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <MenuItem onSelect={onHide} icon={<EyeOff className="h-3.5 w-3.5" />}>
+          Hide on this page
+        </MenuItem>
+        <MenuItem onSelect={focused ? onClearFocus : onFocus} icon={<Eye className="h-3.5 w-3.5" />}>
+          {focused ? "Show all groups" : "Focus this group"}
+        </MenuItem>
+        <DropdownMenuSeparator />
+        <MenuItem disabled={openCount === 0} onSelect={onResolveAll} icon={<CircleCheck className="h-3.5 w-3.5" />}>
+          {openCount > 0 ? `Resolve all (${openCount})` : "Resolve all"}
+        </MenuItem>
+        <MenuItem onSelect={onRename} icon={<Pencil className="h-3.5 w-3.5" />}>
+          Rename
+        </MenuItem>
+        <MenuItem onSelect={onDelete} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
+          Delete
+        </MenuItem>
+        {actions.length > 0 ? <DropdownMenuSeparator /> : null}
+        {actions.map((a) => {
+          const sending = sendingAction === a.id;
+          const sent = sentAction === a.id;
+          return (
+            <MenuItem
+              key={a.id}
+              disabled={disabled || itemCount === 0}
+              icon={sending ? <Spinner className="h-3.5 w-3.5" /> : <ProviderIcon action={a} colored />}
+              onSelect={() => onSend(a.id)}
+            >
+              {sending ? `Sending to ${displayActionLabel(a)}` : sent ? `Sent to ${displayActionLabel(a)}` : `Send to ${displayActionLabel(a)}`}
+            </MenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
-  const menu = open ? (
-    <div
-      role="menu"
-      className="absolute right-0 top-[calc(100%+4px)] z-[2147483647] w-48 overflow-hidden rounded-lg border border-loupe-line bg-loupe-panel p-1 text-loupe-fg shadow-2xl shadow-black/50"
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <MenuItem onSelect={() => choose(onHide)} icon={<EyeOff className="h-3.5 w-3.5" />}>
-        Hide on this page
-      </MenuItem>
-      <MenuItem
-        onSelect={() => choose(focused ? onClearFocus : onFocus)}
-        icon={<Eye className="h-3.5 w-3.5" />}
-      >
-        {focused ? "Show all groups" : "Focus this group"}
-      </MenuItem>
-      <div className="my-1 h-px bg-loupe-line/80" />
-      <MenuItem onSelect={() => choose(onRename)} icon={<Pencil className="h-3.5 w-3.5" />}>
-        Rename
-      </MenuItem>
-      <MenuItem onSelect={() => choose(onDelete)} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
-        Delete
-      </MenuItem>
-      {actions.length > 0 ? <div className="my-1 h-px bg-loupe-line/80" /> : null}
-      {actions.map((a) => {
-        const sending = sendingAction === a.id;
-        const sent = sentAction === a.id;
-        return (
-          <MenuItem
-            key={a.id}
-            disabled={disabled || itemCount === 0}
-            icon={<ProviderIcon action={a} colored />}
-            onSelect={() => choose(() => onSend(a.id))}
-          >
-            {sending ? `Sending to ${displayActionLabel(a)}...` : sent ? `Sent to ${displayActionLabel(a)}` : `Send to ${displayActionLabel(a)}`}
-          </MenuItem>
-        );
-      })}
-    </div>
-  ) : null;
+function ListActionsMenu({
+  visibleCount,
+  scopedCount,
+  showResolved,
+  onToggleResolved,
+  resolvedCount,
+  onDeleteResolved,
+  groupVisibilityActive,
+  onShowAllGroups,
+}: {
+  visibleCount: number;
+  scopedCount: number;
+  showResolved: boolean;
+  onToggleResolved: () => void;
+  resolvedCount: number;
+  onDeleteResolved: () => void | Promise<void>;
+  groupVisibilityActive: boolean;
+  onShowAllGroups: () => void;
+}) {
+  const [open, setOpen] = React.useState(false);
 
   return (
-    <div
-      className={cn("relative", className)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setOpen(false);
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        className={cn("h-7 w-7 opacity-70 transition-all hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100", open && "opacity-100")}
-        title="More group actions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen((value) => !value);
-        }}
-      >
-        <MoreHorizontal className="h-4 w-4" />
-      </Button>
-      {menu}
-    </div>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="icon-sm" title="More options">
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <div className="px-2 py-1.5 text-[11px] text-loupe-faint">{visibleCount} of {scopedCount} shown</div>
+        <DropdownMenuSeparator />
+        <MenuItem onSelect={onToggleResolved} icon={showResolved ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}>
+          {showResolved ? "Hide resolved" : "Show resolved"}
+        </MenuItem>
+        {groupVisibilityActive ? (
+          <MenuItem onSelect={onShowAllGroups} icon={<Eye className="h-3.5 w-3.5" />}>
+            Show all groups
+          </MenuItem>
+        ) : null}
+        {resolvedCount > 0 ? (
+          <>
+            <DropdownMenuSeparator />
+            <MenuItem onSelect={() => void onDeleteResolved()} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
+              Delete resolved ({resolvedCount})
+            </MenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -819,28 +1168,15 @@ function MenuItem({
   onSelect: () => void;
   tone?: "normal" | "danger";
 }) {
-  const select = (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!disabled) onSelect();
-  };
-
   return (
-    <button
-      type="button"
-      role="menuitem"
+    <DropdownMenuItem
       disabled={disabled}
-      className={cn(
-        "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] outline-none transition-colors",
-        "disabled:pointer-events-none disabled:opacity-45",
-        tone === "normal" && "text-loupe-muted hover:bg-loupe-elev hover:text-loupe-fg focus-visible:bg-loupe-elev focus-visible:text-loupe-fg",
-        tone === "danger" && "text-loupe-muted hover:bg-red-500/10 hover:text-red-200 focus-visible:bg-red-500/10 focus-visible:text-red-200",
-      )}
-      onPointerDown={select}
+      variant={tone === "danger" ? "destructive" : "default"}
+      onSelect={() => onSelect()}
     >
       <span className="grid h-4 w-4 shrink-0 place-items-center">{icon}</span>
       <span className="min-w-0 truncate">{children}</span>
-    </button>
+    </DropdownMenuItem>
   );
 }
 
@@ -865,6 +1201,8 @@ function providerLogoSvg(action: ActionDescriptor | undefined): string | null {
   const label = `${action?.id ?? ""} ${action?.label ?? ""}`.toLowerCase();
   if (label.includes("claude")) return CLAUDE_LOGO_SVG;
   if (label.includes("codex") || label.includes("openai")) return OPENAI_LOGO_SVG;
+  if (label.includes("copilot")) return COPILOT_LOGO_SVG;
+  if (isPi(action)) return PI_LOGO_SVG;
   return null;
 }
 
@@ -872,14 +1210,20 @@ function providerColorClass(action: ActionDescriptor | undefined): string {
   const label = `${action?.id ?? ""} ${action?.label ?? ""}`.toLowerCase();
   if (label.includes("claude")) return "text-[#d97757]";
   if (label.includes("codex") || label.includes("openai")) return "text-loupe-fg";
+  if (label.includes("copilot") || isPi(action)) return "text-loupe-fg";
   return "text-loupe-muted";
+}
+
+/** Match the Pi provider without colliding with unrelated ids containing "pi". */
+function isPi(action: ActionDescriptor | undefined): boolean {
+  return action?.id === "pi" || action?.label?.toLowerCase() === "pi";
 }
 
 function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
   const isExpanded = ctx.expanded === annotation.id;
-  const comments = annotation.comments?.length ?? 0;
   const thumb = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
   const otherPage = pageKey(annotation.url) !== pageKey(location.href);
+  const [menuAnchor, setMenuAnchor] = React.useState<{ x: number; y: number } | null>(null);
 
   return (
     <article
@@ -893,25 +1237,31 @@ function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx:
         e.dataTransfer.setData("application/x-loupe-annotation-id", annotation.id);
       }}
       onDragEnd={() => ctx.setDragOverGroup(null)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenuAnchor({ x: e.clientX, y: e.clientY });
+      }}
     >
+      {menuAnchor ? (
+        <AnnotationRowMenu annotation={annotation} ctx={ctx} anchor={menuAnchor} onClose={() => setMenuAnchor(null)} />
+      ) : null}
       <button
         type="button"
         className="flex w-full items-start gap-2 p-2 text-left"
-        onClick={() => ctx.setExpanded(isExpanded ? null : annotation.id)}
+        onClick={() => ctx.setExpanded(annotation.id)}
       >
         <img src={thumb} alt="" className="h-11 w-14 shrink-0 rounded-lg border border-loupe-line bg-loupe-bg object-cover" onError={(e) => e.currentTarget.remove()} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12.5px] font-medium text-loupe-fg">{componentCrumb(annotation)}</div>
           {annotation.note ? <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-loupe-muted">{annotation.note}</div> : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <Badge tone={statusTone(annotation.status)}>{statusLabel(annotation.status)}</Badge>
-            <Badge><MessageSquare className="h-3 w-3" />{comments}</Badge>
-            {otherPage ? <Badge>{hostLabel(annotation.url)}</Badge> : null}
+            <StatusBadge status={annotation.status} />
+            {otherPage ? <Badge variant="outline">{hostLabel(annotation.url)}</Badge> : null}
           </div>
         </div>
         <Button
-          variant="secondary"
-          size="icon"
+          variant="outline"
+          size="icon-sm"
           title={otherPage ? "Open annotation page" : "Jump to annotation"}
           onClick={(e) => {
             e.stopPropagation();
@@ -921,19 +1271,207 @@ function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx:
           <ExternalLink className="h-3.5 w-3.5" />
         </Button>
       </button>
-      {isExpanded ? <AnnotationDetail annotation={annotation} ctx={ctx} /> : null}
     </article>
+  );
+}
+
+/** Right-click menu for an annotation row: same send / resolve / delete actions
+ * as the detail view, reachable straight from the overview. Anchored to the
+ * cursor via a zero-size virtual trigger so Radix handles positioning. */
+function AnnotationRowMenu({
+  annotation,
+  ctx,
+  anchor,
+  onClose,
+}: {
+  annotation: StoredAnnotation;
+  ctx: ViewerContext;
+  anchor: { x: number; y: number };
+  onClose: () => void;
+}) {
+  const sendable = ctx.actions.filter((a) => a.id !== "save");
+  const [busy, setBusy] = React.useState(false);
+
+  async function send(actionId: string) {
+    if (busy) return;
+    setBusy(true);
+    await chrome.runtime.sendMessage({ type: "annotation-run", id: annotation.id, action: actionId } satisfies LoupeMessage);
+    setBusy(false);
+  }
+
+  async function setStatus(status: AnnotationStatus) {
+    const r = (await chrome.runtime.sendMessage({ type: "update-annotation", id: annotation.id, patch: { status } } satisfies LoupeMessage)) as SimpleResult;
+    if (r.ok) await ctx.reload();
+  }
+
+  async function remove() {
+    const r = (await chrome.runtime.sendMessage({ type: "delete-annotation", id: annotation.id } satisfies LoupeMessage)) as SimpleResult;
+    if (r.ok) {
+      if (ctx.expanded === annotation.id) ctx.setExpanded(null);
+      await ctx.reload();
+    }
+  }
+
+  return (
+    <DropdownMenu open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DropdownMenuTrigger asChild>
+        <span aria-hidden className="pointer-events-none fixed" style={{ left: anchor.x, top: anchor.y, width: 0, height: 0 }} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" sideOffset={2} className="w-52">
+        <MenuItem onSelect={() => jumpToAnnotation(annotation, ctx)} icon={<ExternalLink className="h-3.5 w-3.5" />}>
+          {pageKey(annotation.url) !== pageKey(location.href) ? "Open annotation page" : "Jump to annotation"}
+        </MenuItem>
+        <MenuItem
+          onSelect={() => void setStatus(annotation.status === "resolved" ? "open" : "resolved")}
+          icon={<CircleCheck className="h-3.5 w-3.5" />}
+        >
+          {annotation.status === "resolved" ? "Reopen" : "Resolve"}
+        </MenuItem>
+        <MenuItem onSelect={() => void remove()} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
+          Delete
+        </MenuItem>
+        {sendable.length > 0 ? <DropdownMenuSeparator /> : null}
+        {sendable.map((a) => (
+          <MenuItem key={a.id} disabled={busy} onSelect={() => void send(a.id)} icon={<ProviderIcon action={a} colored />}>
+            Send to {displayActionLabel(a)}
+          </MenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function AnnotationDetailScreen({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
+  const [sendingAction, setSendingAction] = React.useState<string | null>(null);
+  const [sentAction, setSentAction] = React.useState<string | null>(null);
+  const sendable = ctx.actions.filter((a) => a.id !== "save");
+  const shotSrc = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
+
+  async function sendAnnotation(actionId: string) {
+    if (!actionId) return;
+    setSendingAction(actionId);
+    setSentAction(null);
+    const r = (await chrome.runtime.sendMessage({
+      type: "annotation-run",
+      id: annotation.id,
+      action: actionId,
+    } satisfies LoupeMessage)) as SimpleResult;
+    setSendingAction(null);
+    if (r.ok) setSentAction(actionId);
+  }
+
+  return (
+    <div className="px-2 pb-2">
+      <div className="sticky top-0 z-10 -mx-2 -mt-2 mb-2 flex items-center gap-2 border-b border-loupe-line/70 bg-loupe-panel px-3 pb-2 pt-2">
+        <Button variant="ghost" size="icon-sm" title="Back to annotations" onClick={() => ctx.setExpanded(null)}>
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium text-loupe-fg">{componentCrumb(annotation)}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={annotation.status} />
+            <Badge variant="outline">{annotation.group || "Inbox"}</Badge>
+          </div>
+        </div>
+        <AnnotationActionsMenu
+          actions={sendable}
+          disabled={sendingAction !== null}
+          sentAction={sentAction}
+          sendingAction={sendingAction}
+          onSend={(actionId) => void sendAnnotation(actionId)}
+        />
+      </div>
+      <AnnotationHeroImage src={shotSrc} onOpen={() => ctx.setLightbox(shotSrc)} />
+      <AnnotationDetail annotation={annotation} ctx={ctx} />
+    </div>
+  );
+}
+
+function AnnotationHeroImage({ src, onOpen }: { src: string; onOpen: () => void }) {
+  const [failed, setFailed] = React.useState(false);
+  return (
+    <div className="mb-2 overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg">
+      {failed ? (
+        <div className="grid min-h-28 place-items-center px-4 py-8 text-center text-[12px] text-loupe-faint">
+          Annotation image could not be loaded
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="block w-full text-left transition-colors hover:bg-white/[0.03]"
+          onClick={onOpen}
+          title="Open annotation image"
+        >
+          <img
+            src={src}
+            alt="Annotation screenshot"
+            className="max-h-72 w-full bg-loupe-bg object-contain"
+            onError={() => setFailed(true)}
+          />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AnnotationActionsMenu({
+  actions,
+  disabled,
+  sentAction,
+  sendingAction,
+  onSend,
+}: {
+  actions: ActionDescriptor[];
+  disabled?: boolean;
+  sentAction: string | null;
+  sendingAction: string | null;
+  onSend: (action: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          title="Send annotation"
+          disabled={actions.length === 0}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        {actions.map((a) => {
+          const sending = sendingAction === a.id;
+          const sent = sentAction === a.id;
+          return (
+            <MenuItem
+              key={a.id}
+              disabled={disabled}
+              icon={sending ? <Spinner className="h-3.5 w-3.5" /> : <ProviderIcon action={a} colored />}
+              onSelect={() => onSend(a.id)}
+            >
+              {sending ? `Sending to ${displayActionLabel(a)}` : sent ? `Sent to ${displayActionLabel(a)}` : `Send to ${displayActionLabel(a)}`}
+            </MenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
   const [note, setNote] = React.useState(annotation.note ?? "");
-  const [reply, setReply] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-  const [commenting, setCommenting] = React.useState(false);
   const [refNotice, setRefNotice] = React.useState<{ tone: "ok" | "error" | "muted"; text: string } | null>(null);
   const fileRef = React.useRef<HTMLInputElement | null>(null);
   const meta = annotation as StoredAnnotation & { resolution?: { primary?: string } };
+
+  const savedNote = annotation.note ?? "";
+  const dirty = note !== savedNote;
 
   async function save() {
     setSaving(true);
@@ -946,19 +1484,21 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
     if (r.ok) await ctx.reload();
   }
 
-  async function post(body: string, status?: AnnotationStatus) {
-    if (!body) return;
-    setCommenting(true);
+  // Auto-save the note on a short debounce so there's no explicit Save button.
+  React.useEffect(() => {
+    if (!dirty) return;
+    const timer = setTimeout(() => void save(), 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note, dirty]);
+
+  async function setStatus(status: AnnotationStatus) {
     const r = (await chrome.runtime.sendMessage({
-      type: "comment",
+      type: "update-annotation",
       id: annotation.id,
-      comment: { author: ctx.author, body, createdAt: new Date().toISOString(), ...(status ? { status } : {}) },
+      patch: { status },
     } satisfies LoupeMessage)) as SimpleResult;
-    setCommenting(false);
-    if (r.ok) {
-      setReply("");
-      await ctx.reload();
-    }
+    if (r.ok) await ctx.reload();
   }
 
   async function addReference(dataUrl: string, caption: string) {
@@ -995,7 +1535,10 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
       ) : null}
       {meta.resolution?.primary ? <div className="mb-2 break-all font-mono text-[11px] text-loupe-faint">{meta.resolution.primary}</div> : null}
       <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Annotation note..." />
-      <div className="mt-2 flex items-center gap-1.5">
+      <div className="mt-1 h-3.5 text-right text-[10.5px] text-loupe-faint">
+        {saving ? "Saving…" : dirty ? "Editing…" : null}
+      </div>
+      <div className="mt-1 flex items-center gap-1.5">
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={async (e) => {
           const picked = e.currentTarget.files?.[0];
           if (!picked) return;
@@ -1006,7 +1549,7 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
             // addReference already surfaced the error inline.
           }
         }} />
-        <Button variant="secondary" size="xs" onClick={() => fileRef.current?.click()}><ImagePlus className="h-3.5 w-3.5" />Add ref</Button>
+        <Button variant="outline" size="xs" onClick={() => fileRef.current?.click()}><ImagePlus className="h-3.5 w-3.5" />Add ref</Button>
         <LibraryReferencePicker
           bridgeUrl={ctx.bridgeUrl}
           repoRoot={ctx.repoRoot}
@@ -1030,42 +1573,187 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
           {refNotice.text}
         </div>
       ) : null}
-      <div className="mt-2 space-y-1.5">
-        {(annotation.comments ?? []).map((comment, index) => (
-          <div key={`${comment.createdAt}-${index}`} className="rounded-xl border border-loupe-line bg-loupe-bg/60 px-2.5 py-1.5">
-            <div className="mb-0.5 text-[10.5px] text-loupe-faint">{comment.author} · {timeAgo(comment.createdAt)}{comment.status ? ` · ${statusLabel(comment.status)}` : ""}</div>
-            <div className="whitespace-pre-wrap text-[12px] leading-snug text-loupe-fg/90">{comment.body}</div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 flex items-center gap-1.5">
-        <Input value={reply} onChange={(e) => setReply(e.target.value)} placeholder={annotation.status === "needs_review" ? "feedback..." : "comment..."} onKeyDown={(e) => {
-          if (e.key === "Enter") void post(reply, annotation.status === "needs_review" ? "open" : undefined);
-        }} />
+      <div className="mt-2 flex flex-col gap-1.5">
         <Button
-          variant="secondary"
-          size="icon"
-          className="shrink-0"
-          disabled={commenting || !reply.trim()}
-          onClick={() => void post(reply, annotation.status === "needs_review" ? "open" : undefined)}
-          aria-label={commenting ? "Sending comment" : "Comment"}
-          title="Comment"
+          variant="outline"
+          className="w-full"
+          onClick={() => void setStatus(annotation.status === "resolved" ? "open" : "resolved")}
         >
-          <ArrowUp className="h-3.5 w-3.5" />
+          {annotation.status === "resolved" ? "Reopen" : <><CircleCheck className="h-4 w-4" />Resolve</>}
         </Button>
-      </div>
-      <div className="mt-2 flex items-center gap-1.5">
-        <Button className="w-20" variant="primary" size="xs" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</Button>
-        <Button className="w-20" variant="secondary" size="xs" onClick={() => void post(annotation.status === "resolved" ? "reopened" : "resolved", annotation.status === "resolved" ? "open" : "resolved")}>
-          {annotation.status === "resolved" ? "Reopen" : "Resolve"}
-        </Button>
-        <DeleteAnnotationButton annotation={annotation} onDone={async () => {
-          ctx.setExpanded(null);
-          await ctx.reload();
-        }} />
+        <DeleteAnnotationButton
+          full
+          annotation={annotation}
+          onDone={async () => {
+            ctx.setExpanded(null);
+            await ctx.reload();
+          }}
+        />
       </div>
     </div>
   );
+}
+
+interface RecordingMeta {
+  startedAt?: string;
+  durationMs?: number;
+  video?: string | null;
+  counts?: { console?: number; network?: number; errors?: number; failedRequests?: number };
+  keyframes?: { t?: number; label?: string; file?: string }[];
+  files?: { keyframes?: string[] };
+}
+
+function recordingMetaOf(a: StoredAnnotation): RecordingMeta {
+  return (a as StoredAnnotation & { recording?: RecordingMeta }).recording ?? {};
+}
+
+function RecordingsTab({ recordings, ctx }: { recordings: StoredAnnotation[]; ctx: ViewerContext }) {
+  const visible = ctx.showResolved ? recordings : recordings.filter((r) => r.status !== "resolved");
+  if (recordings.length === 0) {
+    return (
+      <div className="px-6 py-12 text-center text-[12px] text-loupe-faint">
+        No flow recordings yet — press <span className="font-semibold text-loupe-muted">R</span> while capturing to record one.
+      </div>
+    );
+  }
+  if (visible.length === 0) {
+    return <div className="px-6 py-12 text-center text-[12px] text-loupe-faint">Only resolved recordings here</div>;
+  }
+  return (
+    <div className="space-y-2 px-2">
+      {visible.map((rec) => (
+        <RecordingCard key={rec.id} recording={rec} ctx={ctx} />
+      ))}
+    </div>
+  );
+}
+
+function RecordingCard({ recording, ctx }: { recording: StoredAnnotation; ctx: ViewerContext }) {
+  const isExpanded = ctx.expanded === recording.id;
+  const meta = recordingMetaOf(recording);
+  const counts = meta.counts ?? {};
+  const failed = counts.failedRequests ?? 0;
+  const errors = counts.errors ?? 0;
+  const videoSrc = fileUrl(ctx.bridgeUrl, recording.dir, meta.video || "recording.webm", { pageUrl: location.href, repoRoot: ctx.repoRoot });
+  const keyframes = recordingKeyframes(meta);
+
+  const [note, setNote] = React.useState(recording.note ?? "");
+  const [saving, setSaving] = React.useState(false);
+
+  async function save() {
+    setSaving(true);
+    const r = (await chrome.runtime.sendMessage({ type: "update-annotation", id: recording.id, patch: { note } } satisfies LoupeMessage)) as SimpleResult;
+    setSaving(false);
+    if (r.ok) await ctx.reload();
+  }
+
+  async function setStatus(status: AnnotationStatus) {
+    const r = (await chrome.runtime.sendMessage({
+      type: "update-annotation",
+      id: recording.id,
+      patch: { status },
+    } satisfies LoupeMessage)) as SimpleResult;
+    if (r.ok) await ctx.reload();
+  }
+
+  return (
+    <article className={cn("overflow-hidden rounded-xl border bg-transparent transition-colors", isExpanded ? "border-loupe-line bg-white/[0.04]" : "border-transparent hover:bg-white/[0.04]")}>
+      <RecordingPreview
+        videoSrc={videoSrc}
+        keyframes={keyframes}
+        recordingDir={recording.dir}
+        ctx={ctx}
+      />
+      <button type="button" className="flex w-full items-start gap-2 p-2 text-left" onClick={() => ctx.setExpanded(isExpanded ? null : recording.id)}>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium text-loupe-fg">{recording.title || hostLabel(recording.url)}</div>
+          {recording.note ? <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-loupe-muted">{recording.note}</div> : null}
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={recording.status} />
+            {meta.durationMs ? <Badge variant="outline">{formatClock(meta.durationMs)}</Badge> : null}
+            <Badge variant="outline">{counts.console ?? 0} console</Badge>
+            <Badge variant="outline">{counts.network ?? 0} net</Badge>
+            {errors + failed > 0 ? <Badge variant="outline" className="text-amber-300">{errors + failed} error{errors + failed === 1 ? "" : "s"}</Badge> : null}
+          </div>
+        </div>
+        <ChevronRight className={cn("mt-1 h-4 w-4 shrink-0 text-loupe-faint transition-transform", isExpanded && "rotate-90")} />
+      </button>
+      {isExpanded ? (
+        <div className="border-t border-loupe-line px-2 pb-2 pt-2">
+          <div className="mb-2 break-all font-mono text-[11px] text-loupe-faint">{recording.url}</div>
+          <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Recording note..." />
+          <div className="mt-2 flex items-center gap-1.5">
+            <Button variant="default" size="xs" loading={saving} onClick={() => void save()}>Save</Button>
+            <Button variant="outline" size="xs" onClick={() => void setStatus(recording.status === "resolved" ? "open" : "resolved")}>
+              {recording.status === "resolved" ? "Reopen" : "Resolve"}
+            </Button>
+            <DeleteAnnotationButton annotation={recording} onDone={async () => {
+              ctx.setExpanded(null);
+              await ctx.reload();
+            }} />
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function formatClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
+}
+
+function RecordingPreview({
+  ctx,
+  keyframes,
+  recordingDir,
+  videoSrc,
+}: {
+  ctx: ViewerContext;
+  keyframes: { t?: number; label?: string; file: string }[];
+  recordingDir: string;
+  videoSrc: string;
+}) {
+  const [videoFailed, setVideoFailed] = React.useState(false);
+  const firstFrame = keyframes[0];
+
+  if (!videoFailed) {
+    return (
+      <video
+        src={videoSrc}
+        controls
+        preload="metadata"
+        className="aspect-video w-full border-b border-loupe-line bg-black"
+        onError={() => setVideoFailed(true)}
+      />
+    );
+  }
+
+  if (firstFrame) {
+    const src = fileUrl(ctx.bridgeUrl, recordingDir, firstFrame.file, { pageUrl: location.href, repoRoot: ctx.repoRoot });
+    return (
+      <button
+        type="button"
+        className="block aspect-video w-full border-b border-loupe-line bg-black text-left"
+        onClick={() => ctx.setLightbox(src)}
+        title={firstFrame.label || "Open recording keyframe"}
+      >
+        <img src={src} alt="" className="h-full w-full object-contain" />
+      </button>
+    );
+  }
+
+  return (
+    <div className="grid aspect-video w-full place-items-center border-b border-loupe-line bg-black/40 px-4 text-center text-[11px] text-loupe-faint">
+      No video or keyframes captured
+    </div>
+  );
+}
+
+function recordingKeyframes(meta: RecordingMeta): { t?: number; label?: string; file: string }[] {
+  const detailed = (meta.keyframes ?? []).filter((frame): frame is { t?: number; label?: string; file: string } => Boolean(frame.file));
+  if (detailed.length > 0) return detailed;
+  return (meta.files?.keyframes ?? []).map((file) => ({ file }));
 }
 
 function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }) {
@@ -1122,9 +1810,9 @@ function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }
                 <div className="line-clamp-1 text-[12px] font-semibold text-loupe-fg">{group.title || hostLabel(group.url)}</div>
                 <div className="mt-0.5 line-clamp-1 text-[10.5px] text-loupe-faint">{group.url}</div>
               </div>
-              <Badge className="ml-auto shrink-0">{group.items.length}</Badge>
+              <Badge variant="outline" className="ml-auto shrink-0">{group.items.length}</Badge>
               <Button
-                variant="danger"
+                variant="destructive"
                 size="xs"
                 className="shrink-0"
                 disabled={deleting !== null}
@@ -1148,20 +1836,21 @@ function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }
                       <div className="text-[10.5px] text-loupe-faint">{formatCaptureDate(ref.createdAt)}</div>
                       <div className="flex items-center gap-1.5 pt-1">
                         {ref.url ? (
-                          <Button variant="secondary" size="xs" onClick={() => window.open(ref.url, "_blank", "noopener,noreferrer")}>
+                          <Button variant="outline" size="xs" onClick={() => window.open(ref.url, "_blank", "noopener,noreferrer")}>
                             <ExternalLink className="h-3.5 w-3.5" />
                             Open
                           </Button>
                         ) : null}
                         <Button
                           className="ml-auto"
-                          variant="danger"
+                          variant="destructive"
                           size="xs"
+                          loading={deleting === ref.id}
                           disabled={deleting !== null}
                           onClick={() => void deleteItem(ref)}
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          {deleting === ref.id ? "Deleting..." : "Delete"}
+                          {deleting === ref.id ? null : <Trash2 className="h-3.5 w-3.5" />}
+                          Delete
                         </Button>
                       </div>
                     </div>
@@ -1220,7 +1909,7 @@ function LibraryReferencePicker({
     <div className={cn("relative", open && "basis-full")} data-loupe-library-popover={open ? "" : undefined}>
       <Button
         type="button"
-        variant="secondary"
+        variant="outline"
         size="xs"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -1235,7 +1924,7 @@ function LibraryReferencePicker({
                 <div className="text-[13px] font-semibold leading-none">Reference library</div>
                 <div className="mt-1 text-[11px] text-loupe-muted">Choose a capture to attach.</div>
               </div>
-              <Button variant="ghost" size="icon" className="ml-auto h-7 w-7" title="Close library" onClick={() => setOpen(false)}>
+              <Button variant="ghost" size="icon-sm" className="ml-auto h-7 w-7" title="Close library" onClick={() => setOpen(false)}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -1300,8 +1989,8 @@ function LibraryReferencePicker({
                                 </div>
                                 <div className="line-clamp-1 text-[10.5px] text-loupe-faint">{ref.url || ref.id}</div>
                                 <div className="text-[10.5px] text-loupe-faint">{formatCaptureDate(ref.createdAt)}</div>
-                                <div className="pt-1 text-[11px] font-medium text-loupe-muted group-hover:text-loupe-fg">
-                                  {attaching === ref.id ? "Attaching..." : "Attach"}
+                                <div className="flex items-center gap-1 pt-1 text-[11px] font-medium text-loupe-muted group-hover:text-loupe-fg">
+                                  {attaching === ref.id ? <><Spinner className="h-3 w-3" />Attaching</> : "Attach"}
                                 </div>
                               </div>
                             </button>
@@ -1319,21 +2008,22 @@ function LibraryReferencePicker({
   );
 }
 
-function DeleteAnnotationButton({ annotation, onDone }: { annotation: StoredAnnotation; onDone: () => Promise<void> }) {
+function DeleteAnnotationButton({ annotation, onDone, full = false }: { annotation: StoredAnnotation; onDone: () => Promise<void>; full?: boolean }) {
   const [deleting, setDeleting] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);
+  const size = full ? "default" : "xs";
   return (
-    <div className="ml-auto flex items-center gap-1.5">
+    <div className={cn("flex items-center gap-1.5", full ? "w-full" : "ml-auto")}>
       {confirming ? (
-        <Button type="button" variant="secondary" size="xs" className="min-w-16" onClick={() => setConfirming(false)}>
+        <Button type="button" variant="outline" size={size} className={cn(full && "flex-1")} onClick={() => setConfirming(false)}>
           Cancel
         </Button>
       ) : null}
       <Button
-        className="min-w-20"
-        variant="danger"
-        size="xs"
-        disabled={deleting}
+        variant="destructive"
+        size={size}
+        className={cn(full && "flex-1")}
+        loading={deleting}
         onClick={async () => {
           if (!confirming) {
             setConfirming(true);
@@ -1346,39 +2036,7 @@ function DeleteAnnotationButton({ annotation, onDone }: { annotation: StoredAnno
           if (r.ok) await onDone();
         }}
       >
-        <Trash2 className="h-3.5 w-3.5" />{deleting ? "Deleting..." : confirming ? "Confirm" : "Delete"}
-      </Button>
-    </div>
-  );
-}
-
-function DeleteResolvedButton({ count, onDone }: { count: number; onDone: () => Promise<void> }) {
-  const [deleting, setDeleting] = React.useState(false);
-  const [confirming, setConfirming] = React.useState(false);
-  return (
-    <div className="flex items-center gap-1.5">
-      {confirming ? (
-        <Button type="button" variant="secondary" size="xs" className="min-w-16" onClick={() => setConfirming(false)}>
-          Cancel
-        </Button>
-      ) : null}
-      <Button
-        variant="danger"
-        size="xs"
-        disabled={deleting}
-        onClick={async () => {
-          if (!confirming) {
-            setConfirming(true);
-            return;
-          }
-          setDeleting(true);
-          const r = (await chrome.runtime.sendMessage({ type: "delete-resolved" } satisfies LoupeMessage)) as SimpleResult;
-          setDeleting(false);
-          setConfirming(false);
-          if (r.ok) await onDone();
-        }}
-      >
-        <Trash2 className="h-3.5 w-3.5" />{deleting ? "Deleting..." : confirming ? `Confirm ${count}` : "Delete resolved"}
+        {deleting ? null : <Trash2 className="h-3.5 w-3.5" />}{confirming ? "Confirm" : "Delete"}
       </Button>
     </div>
   );
@@ -1452,39 +2110,26 @@ function SelectionRect({ annotation }: { annotation: StoredAnnotation | undefine
 function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[2147483647] grid place-items-center bg-black/80 p-6" onClick={onClose}>
-      <Button className="fixed right-4 top-4 bg-white/10" variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+      <Button className="fixed right-4 top-4 bg-white/10" variant="ghost" size="icon-sm" onClick={onClose}><X className="h-4 w-4" /></Button>
       <img src={src} alt="annotation screenshot" className="max-h-full max-w-full rounded-lg border border-loupe-line bg-loupe-bg object-contain shadow-2xl shadow-black/50" onClick={(e) => e.stopPropagation()} />
     </div>
   );
 }
 
-function SegmentButton({ active, children, count, onClick }: { active: boolean; children: React.ReactNode; count: number; onClick: () => void }) {
+function LoupeMark({ className }: { className?: string }) {
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] text-loupe-muted transition-all hover:text-loupe-fg active:scale-[0.98]",
-        active && "bg-loupe-elev text-loupe-fg",
-      )}
-      onClick={onClick}
-    >
-      <span>{children}</span>
-      <span
-        className={cn(
-          "grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-semibold leading-none",
-          active ? "bg-loupe-fg text-loupe-bg" : "border border-loupe-line-strong bg-white/10 text-loupe-muted",
-        )}
-      >
-        {count}
-      </span>
-    </button>
+    <span
+      aria-hidden
+      className={cn("inline-flex items-center justify-center [&>svg]:h-full [&>svg]:w-full", className)}
+      dangerouslySetInnerHTML={{ __html: LOUPE_LOGO_SVG }}
+    />
   );
 }
 
 function Logo() {
   return (
     <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-lg border border-loupe-line bg-loupe-elev/85">
-      <Search className="h-4 w-4 text-loupe-muted" />
+      <LoupeMark className="h-4 w-4 text-loupe-muted" />
     </span>
   );
 }
@@ -1495,10 +2140,14 @@ function statusLabel(status: AnnotationStatus | undefined): string {
   return "Open";
 }
 
-function statusTone(status: AnnotationStatus | undefined): "open" | "needs_review" | "resolved" {
-  if (status === "needs_review") return "needs_review";
-  if (status === "resolved") return "resolved";
-  return "open";
+function StatusBadge({ status }: { status: AnnotationStatus | undefined }) {
+  if (status === "needs_review")
+    return (
+      <Badge variant="outline" title="Needs review" className="text-amber-300">
+        <CircleAlert className="h-3 w-3" />
+      </Badge>
+    );
+  return <Badge variant="outline">{statusLabel(status)}</Badge>;
 }
 
 function BrandFooter() {
@@ -1506,19 +2155,19 @@ function BrandFooter() {
     <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-loupe-line px-3 py-2 text-loupe-muted">
       <span className="inline-flex items-center gap-1.5 text-[11px] font-medium">
         <span className="grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded-full border border-loupe-line bg-loupe-elev/85">
-          <Search className="h-3 w-3" />
+          <LoupeMark className="h-3 w-3" />
         </span>
         Powered by Loupe
       </span>
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="xs"
         title="Open Loupe on GitHub"
-        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-loupe-line bg-transparent px-2 text-[11px] font-semibold text-loupe-muted transition-colors hover:border-loupe-line-strong hover:text-loupe-fg"
         onClick={() => window.open(GITHUB_REPO_URL, "_blank", "noopener,noreferrer")}
       >
         <span className="grid h-3.5 w-3.5 place-items-center" dangerouslySetInnerHTML={{ __html: GITHUB_LOGO_SVG }} />
         GitHub
-      </button>
+      </Button>
     </footer>
   );
 }
@@ -1706,6 +2355,13 @@ function componentCrumb(a: StoredAnnotation): string {
   return a.target.componentChain.map((c) => c.name).join(" › ") || a.target.tag;
 }
 
+function annotationMatches(a: StoredAnnotation, query: string): boolean {
+  if (!query) return true;
+  return [a.note, componentCrumb(a), a.group, a.groupSlug, a.title, hostLabel(a.url), a.target.text].some((value) =>
+    normalizeSearch(value ?? undefined).includes(query),
+  );
+}
+
 export function fileUrl(
   bridgeUrl: string,
   dir: string,
@@ -1736,7 +2392,26 @@ function compactLabel(value: string, limit: number): string {
 }
 
 function eventPathHasAttribute(event: Event, attribute: string): boolean {
-  return event.composedPath().some((node) => node instanceof HTMLElement && node.hasAttribute(attribute));
+  return event.composedPath().some((node) => hasElementAttribute(node, attribute));
+}
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!isElementLike(target)) return false;
+  if (Boolean((target as HTMLElement).isContentEditable)) return true;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select";
+}
+
+function hasElementAttribute(node: EventTarget, attribute: string): boolean {
+  return isElementLike(node) && node.hasAttribute(attribute);
+}
+
+function isElementLike(node: EventTarget | null): node is Element {
+  return !!node && typeof (node as Element).tagName === "string" && typeof (node as Element).hasAttribute === "function";
+}
+
+function uniqueWindows(windows: (Window | null)[]): Window[] {
+  return [...new Set(windows.filter((targetWindow): targetWindow is Window => targetWindow !== null))];
 }
 
 function hostLabel(url: string | undefined): string {
