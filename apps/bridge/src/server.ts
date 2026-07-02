@@ -149,6 +149,10 @@ async function handleRequest(
       handleDreamRun(config, decodeURIComponent(dreamRun[1]!), JSON.parse(b) as { action?: string }),
     );
   }
+  const dreamReset = path.match(/^\/dreams\/([^/]+)\/reset$/);
+  if (method === "POST" && dreamReset) {
+    return handleResetDream(res, config, decodeURIComponent(dreamReset[1]!));
+  }
   const dreamDetail = path.match(/^\/dreams\/([^/]+)$/);
   if (method === "GET" && dreamDetail) {
     const dream = readDream(config.repoRoot, decodeURIComponent(dreamDetail[1]!));
@@ -588,6 +592,24 @@ async function handleDreamRun(
     source: dream.source,
   });
   return { ok: true, action, detail: outcome.detail, url: outcome.url, dream: readDream(config.repoRoot, id) };
+}
+
+function handleResetDream(res: ServerResponse, config: BridgeConfig, id: string): void {
+  const dream = readDream(config.repoRoot, id);
+  if (!dream) return json(res, 404, { ok: false, error: `dream ${id} not found` });
+  writeDream(config.repoRoot, {
+    id: dream.id,
+    title: dream.title,
+    goal: dream.goal,
+    summary: dream.summary,
+    status: "planned",
+    priority: dream.priority,
+    recommended: dream.recommended,
+    branch: dream.branch,
+    source: dream.source,
+  });
+  console.log(`[loupe] reset dream ${id}`);
+  return json(res, 200, { ok: true, dream: readDream(config.repoRoot, id) });
 }
 
 function handleDeleteDream(res: ServerResponse, config: BridgeConfig, id: string): void {

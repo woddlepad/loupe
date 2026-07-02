@@ -14,6 +14,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RotateCcw,
   Terminal,
   Trash2,
   X,
@@ -337,6 +338,19 @@ function App() {
     setLaunchState({ kind: "ok", message: "Plan deleted" });
   }
 
+  async function resetSelectedPlanLaunch() {
+    if (!selectedPlan) return;
+    const response = await fetch(apiUrl(`/dreams/${encodeURIComponent(selectedPlan.id)}/reset`), { method: "POST" });
+    const result = (await response.json().catch(() => ({}))) as { dream?: DreamDetail; error?: string };
+    if (!response.ok || !result.dream) {
+      setLaunchState({ kind: "error", message: result.error ?? "Could not reset launch state" });
+      return;
+    }
+    mergeDream(result.dream);
+    setDetails((current) => ({ ...current, [result.dream!.id]: result.dream! }));
+    setLaunchState({ kind: "ok", message: "Launch state reset" });
+  }
+
   async function launch(agent: ActionDescriptor) {
     if (!selectedPlan) return;
     if (selectedPlan.status === "running") {
@@ -538,8 +552,10 @@ function App() {
                             <PlanActionsMenu
                               canDelete={Boolean(selectedPlan)}
                               canEdit={Boolean(selectedPlan)}
+                              canReset={selectedPlan?.status === "running"}
                               onDelete={deleteSelectedPlan}
                               onEdit={beginEditPlan}
+                              onReset={resetSelectedPlanLaunch}
                             />
                           </div>
                           <StatusMessage
@@ -1001,13 +1017,17 @@ function AutosaveStatus({ state }: { state: AutosaveState }) {
 function PlanActionsMenu({
   canDelete,
   canEdit,
+  canReset,
   onDelete,
   onEdit,
+  onReset,
 }: {
   canDelete: boolean;
   canEdit: boolean;
+  canReset: boolean;
   onDelete: () => void;
   onEdit: () => void;
+  onReset: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -1021,6 +1041,10 @@ function PlanActionsMenu({
         <DropdownMenuItem disabled={!canEdit} onSelect={onEdit}>
           <Pencil className="size-4" />
           Edit plan
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canReset} onSelect={onReset}>
+          <RotateCcw className="size-4" />
+          Reset launch state
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={!canDelete} onSelect={onDelete} variant="destructive">
