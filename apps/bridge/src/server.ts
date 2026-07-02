@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Annotation, AnnotatePayload, AnnotationStatus } from "@loupe/core/model";
 import { agentAvailability, runAgentGroup } from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
@@ -44,6 +45,8 @@ interface ProjectContext {
   resolver: Resolver;
   registry: ActionRegistry;
 }
+
+const BRIDGE_DIST_DIR = dirname(fileURLToPath(import.meta.url));
 
 export function createBridge(config: BridgeConfig) {
   const contexts = new Map<string, Promise<ProjectContext>>();
@@ -125,6 +128,10 @@ async function handleRequest(
 
   if (method === "GET" && (path === "/" || path === "/dreamer")) {
     return html(res, 200, dreamerHtml());
+  }
+  const dreamerAsset = path.match(/^\/dreamer\/assets\/([^/]+)$/);
+  if (method === "GET" && dreamerAsset) {
+    return serveDreamerAsset(res, dreamerAsset[1]!);
   }
   if (method === "GET" && path === "/dreams") {
     return json(res, 200, { repoRoot: config.repoRoot, dreams: listDreams(config.repoRoot) });
@@ -741,6 +748,17 @@ function serveDreamAsset(res: ServerResponse, repoRoot: string, id: string, rel:
     ".svg": "image/svg+xml",
   };
   res.writeHead(200, { "content-type": types[extname(abs).toLowerCase()] ?? "application/octet-stream" });
+  res.end(readFileSync(abs));
+}
+
+function serveDreamerAsset(res: ServerResponse, name: string): void {
+  if (name !== "dreamer.js" && name !== "dreamer.css") return end(res, 404, "");
+  const abs = join(BRIDGE_DIST_DIR, name);
+  if (!existsSync(abs)) return end(res, 404, "");
+  res.writeHead(200, {
+    "content-type": name.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8",
+    "cache-control": "no-store",
+  });
   res.end(readFileSync(abs));
 }
 
