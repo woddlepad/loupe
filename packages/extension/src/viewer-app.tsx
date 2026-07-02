@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
+  FileDataResult,
   GroupsResult,
   GroupSummary,
   ListResult,
@@ -658,6 +659,53 @@ interface ViewerContext {
 
 type GroupDropPlacement = "before" | "after";
 
+interface BridgeFileSource {
+  dir: string;
+  file: string;
+}
+
+function useBridgeFileDataUrl(source: BridgeFileSource | null | undefined): {
+  src: string | null;
+  failed: boolean;
+  loading: boolean;
+} {
+  const key = source ? `${source.dir}\n${source.file}` : "";
+  const [state, setState] = React.useState<{ src: string | null; failed: boolean; loading: boolean }>({
+    src: null,
+    failed: false,
+    loading: false,
+  });
+
+  React.useEffect(() => {
+    if (!source) {
+      setState({ src: null, failed: true, loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setState({ src: null, failed: false, loading: true });
+    void (chrome.runtime.sendMessage({
+      type: "file-data-url",
+      dir: source.dir,
+      file: source.file,
+    } satisfies LoupeMessage) as Promise<FileDataResult>)
+      .then((result) => {
+        if (cancelled) return;
+        setState(result.ok ? { src: result.dataUrl, failed: false, loading: false } : { src: null, failed: true, loading: false });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ src: null, failed: true, loading: false });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  return state;
+}
+
 interface ViewerFilterOption {
   value: ViewerFilter;
   label: string;
@@ -1262,8 +1310,8 @@ function isPi(action: ActionDescriptor | undefined): boolean {
 /** Failure-aware preview image for a card: a large 16:9 thumbnail that opens the
  * lightbox on click. Shared by annotations and library references so both read
  * as the same kind of thing. */
-function CardMedia({ src, title, onOpen }: { src: string; title?: string; onOpen: () => void }) {
-  const [failed, setFailed] = React.useState(false);
+function CardMedia({ source, title, onOpen }: { source: BridgeFileSource; title?: string; onOpen: (src: string) => void }) {
+  const { src, failed, loading } = useBridgeFileDataUrl(source);
   if (failed) {
     return (
       <div className="grid aspect-video w-full place-items-center border-b border-loupe-line bg-loupe-bg/60 px-4 text-center text-[11px] text-loupe-faint">
@@ -1275,13 +1323,21 @@ function CardMedia({ src, title, onOpen }: { src: string; title?: string; onOpen
     <button
       type="button"
       className="relative block aspect-video w-full overflow-hidden border-b border-loupe-line bg-black/40 transition-opacity hover:opacity-95"
-      onClick={onOpen}
+      onClick={() => {
+        if (src) onOpen(src);
+      }}
       title={title ?? "Open image"}
     >
       {/* Blurred cover fills the frame; the contained copy on top keeps the whole
           capture visible regardless of its aspect ratio. */}
-      <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
-      <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" onError={() => setFailed(true)} />
+      {src ? (
+        <>
+          <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
+          <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" />
+        </>
+      ) : (
+        <span className="absolute inset-0 grid place-items-center text-loupe-faint">{loading ? <Spinner className="h-4 w-4" /> : null}</span>
+      )}
     </button>
   );
 }
@@ -1290,7 +1346,7 @@ function CardMedia({ src, title, onOpen }: { src: string; title?: string; onOpen
  * preview image on top, a title/note body, and an Open + More footer. Every list
  * (annotations, references) renders through this so the views match. */
 function ItemCard({
-  imageSrc,
+  imageSource,
   imageTitle,
   onImageOpen,
   title,
@@ -1308,9 +1364,9 @@ function ItemCard({
   onDragEnd,
   onContextMenu,
 }: {
-  imageSrc: string;
+  imageSource: BridgeFileSource;
   imageTitle?: string;
-  onImageOpen: () => void;
+  onImageOpen: (src: string) => void;
   title: string;
   note?: string;
   badges?: React.ReactNode;
@@ -1343,7 +1399,7 @@ function ItemCard({
         active ? "border-loupe-line bg-white/[0.04]" : "border-loupe-line/60 hover:bg-white/[0.04]",
       )}
     >
-      <CardMedia src={imageSrc} title={imageTitle} onOpen={onImageOpen} />
+      <CardMedia source={imageSource} title={imageTitle} onOpen={onImageOpen} />
       <div className="space-y-2 p-2.5">
         {onBodyClick ? (
           <button type="button" className="block w-full min-w-0 rounded-md text-left" onClick={onBodyClick} title={bodyTitle}>
@@ -1470,7 +1526,6 @@ function ReferenceMoreButton({ refItem, deleting, onDelete }: { refItem: Referen
 
 function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
   const isExpanded = ctx.expanded === annotation.id;
-  const thumb = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
   const otherPage = pageKey(annotation.url) !== pageKey(location.href);
   const [menuAnchor, setMenuAnchor] = React.useState<{ x: number; y: number } | null>(null);
 
@@ -1491,9 +1546,9 @@ function AnnotationRow({ annotation, ctx }: { annotation: StoredAnnotation; ctx:
           e.preventDefault();
           setMenuAnchor({ x: e.clientX, y: e.clientY });
         }}
-        imageSrc={thumb}
+        imageSource={{ dir: annotation.dir, file: "shot.png" }}
         imageTitle="Open annotation image"
-        onImageOpen={() => ctx.setLightbox(thumb)}
+        onImageOpen={(src) => ctx.setLightbox(src)}
         title={annotationHeadline(annotation)}
         note={annotation.note || undefined}
         bodyTitle="Edit details"
@@ -1543,7 +1598,6 @@ function AnnotationDetailScreen({ annotation, ctx }: { annotation: StoredAnnotat
   const [sendingAction, setSendingAction] = React.useState<string | null>(null);
   const [sentAction, setSentAction] = React.useState<string | null>(null);
   const sendable = ctx.actions.filter((a) => a.id !== "save");
-  const shotSrc = fileUrl(ctx.bridgeUrl, annotation.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
 
   async function sendAnnotation(actionId: string) {
     if (!actionId) return;
@@ -1579,14 +1633,14 @@ function AnnotationDetailScreen({ annotation, ctx }: { annotation: StoredAnnotat
           onSend={(actionId) => void sendAnnotation(actionId)}
         />
       </div>
-      <AnnotationHeroImage src={shotSrc} onOpen={() => ctx.setLightbox(shotSrc)} />
+      <AnnotationHeroImage source={{ dir: annotation.dir, file: "shot.png" }} onOpen={(src) => ctx.setLightbox(src)} />
       <AnnotationDetail annotation={annotation} ctx={ctx} />
     </div>
   );
 }
 
-function AnnotationHeroImage({ src, onOpen }: { src: string; onOpen: () => void }) {
-  const [failed, setFailed] = React.useState(false);
+function AnnotationHeroImage({ source, onOpen }: { source: BridgeFileSource; onOpen: (src: string) => void }) {
+  const { src, failed, loading } = useBridgeFileDataUrl(source);
   return (
     <div className="mb-2 overflow-hidden rounded-xl border border-loupe-line bg-loupe-bg">
       {failed ? (
@@ -1597,18 +1651,58 @@ function AnnotationHeroImage({ src, onOpen }: { src: string; onOpen: () => void 
         <button
           type="button"
           className="block w-full text-left transition-colors hover:bg-white/[0.03]"
-          onClick={onOpen}
+          onClick={() => {
+            if (src) onOpen(src);
+          }}
           title="Open annotation image"
         >
-          <img
-            src={src}
-            alt="Annotation screenshot"
-            className="max-h-72 w-full bg-loupe-bg object-contain"
-            onError={() => setFailed(true)}
-          />
+          {src ? (
+            <img src={src} alt="Annotation screenshot" className="max-h-72 w-full bg-loupe-bg object-contain" />
+          ) : (
+            <span className="grid min-h-28 place-items-center text-loupe-faint">{loading ? <Spinner className="h-4 w-4" /> : null}</span>
+          )}
         </button>
       )}
     </div>
+  );
+}
+
+function BridgeThumbnailButton({
+  source,
+  title,
+  className,
+  imageClassName = "h-full w-full object-contain",
+  blurredBackdrop = false,
+  onOpen,
+}: {
+  source: BridgeFileSource;
+  title?: string;
+  className: string;
+  imageClassName?: string;
+  blurredBackdrop?: boolean;
+  onOpen: (src: string) => void;
+}) {
+  const { src, failed, loading } = useBridgeFileDataUrl(source);
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={() => {
+        if (src) onOpen(src);
+      }}
+      title={title}
+    >
+      {src ? (
+        <>
+          {blurredBackdrop ? <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-lg" /> : null}
+          <img src={src} alt="" className={imageClassName} />
+        </>
+      ) : failed ? (
+        <span className="absolute inset-0 grid place-items-center px-2 text-center text-[10px] text-loupe-faint">Image unavailable</span>
+      ) : (
+        <span className="absolute inset-0 grid place-items-center text-loupe-faint">{loading ? <Spinner className="h-3.5 w-3.5" /> : null}</span>
+      )}
+    </button>
   );
 }
 
@@ -1742,15 +1836,15 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
     <div className="border-t border-loupe-line px-2 pb-2 pt-2">
       {thumbs.length > 0 ? (
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {thumbs.map((file) => {
-            const src = fileUrl(ctx.bridgeUrl, annotation.dir, file, { pageUrl: location.href, repoRoot: ctx.repoRoot });
-            return (
-              <button key={file} type="button" className="relative h-16 w-24 overflow-hidden rounded-lg border border-loupe-line bg-loupe-bg" onClick={() => ctx.setLightbox(src)}>
-                <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 object-cover blur-lg" />
-                <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" />
-              </button>
-            );
-          })}
+          {thumbs.map((file) => (
+            <BridgeThumbnailButton
+              key={file}
+              source={{ dir: annotation.dir, file }}
+              className="relative h-16 w-24 overflow-hidden rounded-lg border border-loupe-line bg-loupe-bg"
+              blurredBackdrop
+              onOpen={(src) => ctx.setLightbox(src)}
+            />
+          ))}
         </div>
       ) : null}
       {meta.resolution?.primary ? <div className="mb-2 break-all font-mono text-[11px] text-loupe-faint">{meta.resolution.primary}</div> : null}
@@ -1777,8 +1871,6 @@ function AnnotationDetail({ annotation, ctx }: { annotation: StoredAnnotation; c
         }} />
         <Button variant="outline" size="xs" onClick={() => fileRef.current?.click()}><ImagePlus className="h-3.5 w-3.5" />Add ref</Button>
         <LibraryReferencePicker
-          bridgeUrl={ctx.bridgeUrl}
-          repoRoot={ctx.repoRoot}
           container={ctx.overlayContainer}
           refs={ctx.references}
           onAttach={async (ref) => {
@@ -2357,16 +2449,13 @@ function RecordingPreview({
   }
 
   if (firstFrame) {
-    const src = fileUrl(ctx.bridgeUrl, recordingDir, firstFrame.file, { pageUrl: location.href, repoRoot: ctx.repoRoot });
     return (
-      <button
-        type="button"
-        className="block aspect-video w-full border-b border-loupe-line bg-black text-left"
-        onClick={() => ctx.setLightbox(src)}
+      <BridgeThumbnailButton
+        source={{ dir: recordingDir, file: firstFrame.file }}
+        className="relative block aspect-video w-full border-b border-loupe-line bg-black text-left"
         title={firstFrame.label || "Open recording keyframe"}
-      >
-        <img src={src} alt="" className="h-full w-full object-contain" />
-      </button>
+        onOpen={(src) => ctx.setLightbox(src)}
+      />
     );
   }
 
@@ -2458,22 +2547,19 @@ function LibraryTab({ refs, ctx }: { refs: ReferenceItem[]; ctx: ViewerContext }
               </div>
               {!isCollapsed ? (
                 <div className="space-y-2 px-2">
-                  {group.items.map((ref) => {
-                    const src = fileUrl(ctx.bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot: ctx.repoRoot });
-                    return (
-                      <ItemCard
-                        key={ref.id}
-                        imageSrc={src}
-                        imageTitle="Open reference image"
-                        onImageOpen={() => ctx.setLightbox(src)}
-                        title={ref.note || ref.title || "Untitled reference"}
-                        badges={<Badge variant="outline">{formatCaptureDate(ref.createdAt)}</Badge>}
-                        openTitle="Open source page"
-                        onOpen={ref.url ? () => window.open(ref.url, "_blank", "noopener,noreferrer") : undefined}
-                        more={<ReferenceMoreButton refItem={ref} deleting={deleting === ref.id} onDelete={() => void deleteItem(ref)} />}
-                      />
-                    );
-                  })}
+                  {group.items.map((ref) => (
+                    <ItemCard
+                      key={ref.id}
+                      imageSource={{ dir: ref.dir, file: "shot.png" }}
+                      imageTitle="Open reference image"
+                      onImageOpen={(src) => ctx.setLightbox(src)}
+                      title={ref.note || ref.title || "Untitled reference"}
+                      badges={<Badge variant="outline">{formatCaptureDate(ref.createdAt)}</Badge>}
+                      openTitle="Open source page"
+                      onOpen={ref.url ? () => window.open(ref.url, "_blank", "noopener,noreferrer") : undefined}
+                      more={<ReferenceMoreButton refItem={ref} deleting={deleting === ref.id} onDelete={() => void deleteItem(ref)} />}
+                    />
+                  ))}
                 </div>
               ) : null}
             </div>
@@ -2516,20 +2602,32 @@ function LibrarySectionMenu({ className, disabled, onDeletePage }: { className?:
 }
 
 function LibraryReferencePicker({
-  bridgeUrl,
-  repoRoot,
   container,
   refs,
   onAttach,
 }: {
-  bridgeUrl: string;
-  repoRoot?: string;
   /** Portal target for the picker modal — the shadow-root overlay mount so it stays styled. */
   container?: HTMLElement | null;
   refs: ReferenceItem[];
   onAttach: (ref: ReferenceItem) => Promise<void>;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [thumbs, setThumbs] = React.useState<Record<string, string>>({});
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setThumbs({});
+    for (const ref of refs) {
+      void (chrome.runtime.sendMessage({ type: "reference-image", id: ref.id } satisfies LoupeMessage) as Promise<ReferenceImageResult>)
+        .then((image) => {
+          if (!cancelled && image.ok) setThumbs((current) => ({ ...current, [ref.id]: image.dataUrl }));
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [refs]);
 
   const items = React.useMemo<LibraryItem[]>(
     () =>
@@ -2538,9 +2636,9 @@ function LibraryReferencePicker({
         caption: ref.note || ref.title || "Untitled reference",
         url: ref.url,
         createdAt: ref.createdAt,
-        thumbUrl: fileUrl(bridgeUrl, ref.dir, "shot.png", { pageUrl: location.href, repoRoot }),
+        thumbUrl: thumbs[ref.id] ?? "",
       })),
-    [refs, bridgeUrl, repoRoot],
+    [refs, thumbs],
   );
 
   return (

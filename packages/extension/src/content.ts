@@ -49,16 +49,25 @@ let viewer: LoupeViewer | null = null;
 let mode: "annotate" | "reference" = "annotate";
 let bridgeUrl = "http://localhost:7337";
 let activeRepoRoot = "";
+let frozenScreenshotDataUrl: string | null = null;
 const DRAFT_STORAGE_PREFIX = "loupeDraft:";
 const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 async function toggleAnnotate(): Promise<void> {
+  await toggleAnnotateMode(false);
+}
+
+async function toggleFrozenAnnotate(): Promise<void> {
+  await toggleAnnotateMode(true);
+}
+
+async function toggleAnnotateMode(frozen: boolean): Promise<void> {
   viewer?.close();
   if (overlay?.active) {
     overlay.disable();
     return;
   }
-  await startAnnotating(await loadDraft());
+  await startAnnotating(await loadDraft(), { frozen });
 }
 
 /**
@@ -75,17 +84,25 @@ function handleViewerMode(nextMode: LoupeMode): void {
 }
 
 async function enterAnnotateFromViewer(): Promise<void> {
-  if (!overlay?.active) await startAnnotating(await loadDraft());
+  if (!overlay?.active) await startAnnotating(await loadDraft(), { frozen: false });
   viewer?.bringToFront();
 }
 
 /** Overlay dismissed (Esc / toggle / submit) — snap the toolbar back to Select. */
 function handleOverlayDisabled(): void {
   viewer?.setMode("select");
+  frozenScreenshotDataUrl = null;
 }
 
-async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<void> {
+async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: { frozen?: boolean } = {}): Promise<void> {
+  const frozenCapture = options.frozen
+    ? captureVisiblePage().catch((e) => {
+        console.warn("[loupe] frozen screenshot capture failed", e);
+        return null;
+      })
+    : Promise.resolve(null);
   const settings = await loadSettings();
+  frozenScreenshotDataUrl = await frozenCapture;
   bridgeUrl = bridgeUrlForUrl(settings, location.href);
   activeRepoRoot = settings.activeRepoRoot ?? "";
   const routedOrigins = settings.bridgeRoutes.flatMap((route) => route.origins);
@@ -96,6 +113,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
     overlay = new LoupeOverlay({
       mode: "reference",
       stylesheet: overlayCss,
+      frozenScreenshotUrl: frozenScreenshotDataUrl,
       generateId: newId,
       onSelectionCapture: copySelectionScreenshotToClipboard,
       draft: restoreDraft,
@@ -118,6 +136,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null): Promise<
       library,
       resolveLibraryImage,
       stylesheet: overlayCss,
+      frozenScreenshotUrl: frozenScreenshotDataUrl,
       generateId: newId,
       captureTarget: captureTargetWithPageFrameworks,
       onSelectionCapture: copySelectionScreenshotToClipboard,
@@ -140,18 +159,22 @@ function toggleView(): void {
 
 async function handleSubmit(annotation: Annotation, actionIds: string[]): Promise<void> {
   if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds);
-  // Hide our own chrome so the screenshot is the page only, then capture.
-  overlay?.setChromeVisible(false);
-  await nextFrame();
-  await nextFrame();
-  const shot = (await chrome.runtime.sendMessage({
-    type: "capture",
-    rect: annotation.rect,
-    devicePixelRatio: annotation.devicePixelRatio,
-  } satisfies LoupeMessage)) as CaptureResult;
-  overlay?.setChromeVisible(true);
-  if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
-  annotation.screenshotDataUrl = shot.dataUrl;
+  if (frozenScreenshotDataUrl) {
+    annotation.screenshotDataUrl = await cropFrozenScreenshot(frozenScreenshotDataUrl, annotation.rect);
+  } else {
+    // Hide our own chrome so the screenshot is the page only, then capture.
+    overlay?.setChromeVisible(false);
+    await nextFrame();
+    await nextFrame();
+    const shot = (await chrome.runtime.sendMessage({
+      type: "capture",
+      rect: annotation.rect,
+      devicePixelRatio: annotation.devicePixelRatio,
+    } satisfies LoupeMessage)) as CaptureResult;
+    overlay?.setChromeVisible(true);
+    if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
+    annotation.screenshotDataUrl = shot.dataUrl;
+  }
 
   const clipboardDetail = await copyAnnotationClipboardIfAvailable(annotation);
 
@@ -728,11 +751,40 @@ interface FrameworkInspectResponse {
 
 chrome.runtime.onMessage.addListener((msg: LoupeMessage) => {
   if (msg.type === "toggle") void toggleAnnotate();
+  if (msg.type === "toggle-frozen") void toggleFrozenAnnotate();
   if (msg.type === "toggle-view") toggleView();
 });
 
 function nextFrame(): Promise<void> {
   return new Promise((r) => requestAnimationFrame(() => r()));
+}
+
+async function captureVisiblePage(): Promise<string> {
+  const shot = (await chrome.runtime.sendMessage({ type: "capture-visible" } satisfies LoupeMessage)) as CaptureResult;
+  if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
+  return shot.dataUrl;
+}
+
+async function cropFrozenScreenshot(dataUrl: string, rect: Annotation["rect"]): Promise<string> {
+  const blob = await (await fetch(dataUrl)).blob();
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const scaleX = bitmap.width / Math.max(1, window.innerWidth);
+    const scaleY = bitmap.height / Math.max(1, window.innerHeight);
+    const sx = clamp(Math.round(rect.x * scaleX), 0, Math.max(0, bitmap.width - 1));
+    const sy = clamp(Math.round(rect.y * scaleY), 0, Math.max(0, bitmap.height - 1));
+    const sw = clamp(Math.round(rect.width * scaleX), 1, bitmap.width - sx);
+    const sh = clamp(Math.round(rect.height * scaleY), 1, bitmap.height - sy);
+    const canvas = document.createElement("canvas");
+    canvas.width = sw;
+    canvas.height = sh;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh);
+    return await canvasToDataUrl(canvas);
+  } finally {
+    bitmap.close();
+  }
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -744,9 +796,29 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function canvasToDataUrl(canvas: HTMLCanvasElement): Promise<string> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("could not encode screenshot"));
+        return;
+      }
+      void blobToDataUrl(blob).then(resolve, reject);
+    }, "image/png");
+  });
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
 async function copySelectionScreenshotToClipboard(selection: { rect: Annotation["rect"]; devicePixelRatio: number }): Promise<void> {
   const activeOverlay = overlay;
   try {
+    if (frozenScreenshotDataUrl) {
+      await writeScreenshotToClipboard(await cropFrozenScreenshot(frozenScreenshotDataUrl, selection.rect));
+      return;
+    }
     activeOverlay?.setChromeVisible(false);
     await nextFrame();
     await nextFrame();
