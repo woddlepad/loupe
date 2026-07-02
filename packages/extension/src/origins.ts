@@ -23,9 +23,13 @@ export function isProjectUrl(url: string, patterns: string[]): boolean {
     return false;
   }
   return patterns.some((p) => {
-    const pattern = p.trim().toLowerCase();
+    const pattern = cleanOriginPattern(p);
     return matchHost(pattern.includes(":") ? hostWithPort : host, pattern);
   });
+}
+
+function cleanOriginPattern(pattern: string): string {
+  return pattern.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 }
 
 function matchHost(host: string, pattern: string): boolean {

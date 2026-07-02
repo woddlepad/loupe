@@ -30,6 +30,13 @@ test("an exact remote host matches", () => {
   assert.equal(isProjectUrl("https://staging.acme.com/dash", PROJECT), true);
 });
 
+test("a full remote URL pattern matches by host and port", () => {
+  assert.equal(
+    isProjectUrl("https://mac-studio.taildee56f.ts.net:10000/app", ["https://mac-studio.taildee56f.ts.net:10000/"]),
+    true,
+  );
+});
+
 test("a foreign site (Notion) is NOT a project origin", () => {
   assert.equal(isProjectUrl("https://www.notion.so/page", PROJECT), false);
 });
