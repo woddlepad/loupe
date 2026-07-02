@@ -159,9 +159,9 @@ function App() {
   const [planSort, setPlanSort] = React.useState<PlanSort>("priority");
   const [activeTab, setActiveTab] = React.useState<VisualTab>("plan");
   const [launchState, setLaunchState] = React.useState<LaunchState>({ kind: "idle" });
+  const [launchingAction, setLaunchingAction] = React.useState<string | null>(null);
   const [autosaveState, setAutosaveState] = React.useState<AutosaveState>({ kind: "clean" });
   const [loading, setLoading] = React.useState(true);
-  const [isPending, startTransition] = React.useTransition();
 
   const selectedPlan = React.useMemo(
     () => plans.find((plan) => plan.id === selectedPlanId) ?? plans[0],
@@ -337,11 +337,38 @@ function App() {
     setLaunchState({ kind: "ok", message: "Plan deleted" });
   }
 
-  function launch(agent: ActionDescriptor) {
-    setLaunchState({
-      kind: "error",
-      message: `${agent.label} launch for dreams is not wired yet. Use /dream ${selectedPlan?.id ?? ""} from an agent session for now.`,
-    });
+  async function launch(agent: ActionDescriptor) {
+    if (!selectedPlan) return;
+    if (selectedPlan.status === "running") {
+      setLaunchState({ kind: "error", message: "This dream is already running." });
+      return;
+    }
+    setLaunchingAction(agent.id);
+    setLaunchState({ kind: "idle" });
+    try {
+      const response = await fetch(apiUrl(`/dreams/${encodeURIComponent(selectedPlan.id)}/run`), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: agent.id }),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+        dream?: DreamDetail;
+      };
+      if (!response.ok || result.ok === false) {
+        setLaunchState({ kind: "error", message: result.error ?? result.detail ?? `Could not launch ${agent.label}` });
+        return;
+      }
+      if (result.dream) {
+        mergeDream(result.dream);
+        setDetails((current) => ({ ...current, [result.dream!.id]: result.dream! }));
+      }
+      setLaunchState({ kind: "ok", message: result.detail ?? `Launched ${agent.label}` });
+    } finally {
+      setLaunchingAction(null);
+    }
   }
 
   function apiUrl(path: string): string {
@@ -493,9 +520,10 @@ function App() {
                             {providerActions(actions).map((agent) => (
                               <Button
                                 className="justify-center gap-2"
-                                disabled={isPending || Boolean(draft)}
+                                disabled={Boolean(draft) || Boolean(launchingAction) || selectedPlan?.status === "running"}
                                 key={agent.id}
-                                onClick={() => startTransition(() => launch(agent))}
+                                loading={launchingAction === agent.id}
+                                onClick={() => void launch(agent)}
                                 title={agent.hint}
                                 type="button"
                                 variant={agent.id === "claude" ? "default" : "secondary"}
@@ -514,7 +542,13 @@ function App() {
                               onEdit={beginEditPlan}
                             />
                           </div>
-                          <StatusMessage state={launchState} />
+                          <StatusMessage
+                            state={
+                              selectedPlan?.status === "running" && launchState.kind === "idle"
+                                ? { kind: "ok", message: "This dream is already running." }
+                                : launchState
+                            }
+                          />
                         </div>
                       </div>
                     )}
