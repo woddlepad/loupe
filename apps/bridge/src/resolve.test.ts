@@ -49,6 +49,35 @@ test("ripgrep resolves a component definition to its file", () => {
   assert.match(res.primary ?? "", /Button\.tsx$/);
 });
 
+test("prefers a valid source hint over component-name search", () => {
+  const repo = repoWithComponent();
+  const r = new Resolver(repo);
+  const res = r.resolve(
+    target({
+      componentChain: [
+        { name: "Button", sourcePath: "src/components/Button.tsx" },
+        { name: "App", sourcePath: "/tmp/not-allowed.tsx" },
+      ],
+    }),
+  );
+  assert.equal(res.method, "source-hint");
+  assert.equal(res.primary, "src/components/Button.tsx");
+});
+
+test("ignores unsafe or missing source hints", () => {
+  const r = new Resolver(repoWithComponent());
+  const res = r.resolve(
+    target({
+      componentChain: [
+        { name: "Button", sourcePath: "../Button.tsx" },
+        { name: "Button", sourcePath: "src/components/Missing.tsx" },
+      ],
+    }),
+  );
+  assert.equal(res.method, "ripgrep");
+  assert.match(res.primary ?? "", /Button\.tsx$/);
+});
+
 test("returns method 'none' when nothing matches", () => {
   const r = new Resolver(mkdtempSync(join(tmpdir(), "loupe-empty-")));
   const res = r.resolve(target({ componentChain: [{ name: "ZzzNonexistentComponent" }] }));

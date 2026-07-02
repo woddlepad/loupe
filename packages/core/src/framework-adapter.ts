@@ -3,8 +3,8 @@ import type { ComponentRef } from "./model.js";
 /**
  * Best-effort component ancestry recovery for popular UI runtimes.
  *
- * This intentionally returns only component names. Source locations are resolved
- * later by the bridge from the component name plus DOM signals.
+ * Build-tool integrations may attach repo-relative source hints to component
+ * functions/objects. When present, we carry those through to the bridge.
  */
 
 type Framework = "react" | "vue";
@@ -32,6 +32,7 @@ type VueComponentType = {
   __name?: string;
   _componentTag?: string;
   __file?: string;
+  __loupeSource?: string;
 };
 
 const HOST_COMPONENT_TAG = 5; // React's WorkTag for a host (DOM) component.
@@ -79,7 +80,7 @@ function reactComponentChainFor(node: Element, max: number): ComponentRef[] | nu
     if (fiber.tag !== HOST_COMPONENT_TAG) {
       const name = reactComponentName(fiber.type) ?? reactComponentName(fiber.elementType);
       if (name && name !== lastName && !isInfra(name, "react")) {
-        chain.push({ name, framework: "react" });
+        chain.push({ name, framework: "react", ...sourceHint(fiber.type, fiber.elementType) });
         lastName = name;
       }
     }
@@ -100,7 +101,7 @@ function vueComponentChainFor(node: Element, max: number): ComponentRef[] | null
   while (instance && chain.length < max) {
     const name = vueComponentName(instance);
     if (name && name !== lastName && !isInfra(name, "vue")) {
-      chain.push({ name, framework: "vue" });
+      chain.push({ name, framework: "vue", ...sourceHint(vueComponentType(instance)) });
       lastName = name;
     }
     instance = isVue3Instance(instance) ? (instance.parent ?? null) : (instance.$parent ?? null);
@@ -165,8 +166,42 @@ function reactComponentName(type: unknown): string | undefined {
 }
 
 function vueComponentName(instance: Vue3Instance | Vue2Instance): string | undefined {
-  const type = isVue3Instance(instance) ? instance.type : instance.$options;
+  const type = vueComponentType(instance);
   return cleanName(type?.displayName) ?? cleanName(type?.name) ?? cleanName(type?.__name) ?? fileName(type?.__file);
+}
+
+function vueComponentType(instance: Vue3Instance | Vue2Instance): VueComponentType | undefined {
+  return isVue3Instance(instance) ? instance.type : instance.$options;
+}
+
+function sourceHint(...values: unknown[]): Pick<ComponentRef, "sourcePath"> {
+  for (const value of values) {
+    const sourcePath = readSourcePath(value);
+    if (sourcePath) return { sourcePath };
+  }
+  return {};
+}
+
+function readSourcePath(value: unknown, seen = new Set<unknown>()): string | undefined {
+  if (!value || seen.has(value)) return undefined;
+  seen.add(value);
+
+  if (typeof value === "function" || typeof value === "object") {
+    const obj = value as {
+      __loupeSource?: unknown;
+      render?: unknown;
+      type?: unknown;
+    };
+    if (typeof obj.__loupeSource === "string" && isSafeSourceHint(obj.__loupeSource)) {
+      return obj.__loupeSource;
+    }
+    return readSourcePath(obj.render, seen) ?? readSourcePath(obj.type, seen);
+  }
+  return undefined;
+}
+
+function isSafeSourceHint(value: string): boolean {
+  return value.length > 0 && !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes("..");
 }
 
 function isVue3Instance(instance: Vue3Instance | Vue2Instance): instance is Vue3Instance {
