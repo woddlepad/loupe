@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { codexBackgroundAgent, defaultAgents, type AgentCommand } from "./config.js";
 import { agentAvailable, buildCodexUrl, buildDreamLaunchPrompt, defaultCodexAppServerSocketPath, expandAgentArgv } from "./actions/agent.js";
+import { ActionRegistry } from "./actions/registry.js";
 import type { DreamDetail } from "./dreams.js";
 
 test("expands Claude default to background Loupe slash command", () => {
@@ -78,6 +79,28 @@ test("agentAvailable requires a binary for spawn mode but not other modes", () =
   assert.equal(agentAvailable({ mode: "codex-app" }), true);
   assert.equal(agentAvailable({ mode: "session" }), true);
   assert.equal(agentAvailable({ mode: "spawn" }), false);
+});
+
+test("action descriptors mark every configured session agent as executable", async () => {
+  const registry = await ActionRegistry.build({
+    port: 7337,
+    host: "127.0.0.1",
+    repoRoot: process.cwd(),
+    agents: {
+      claude: { mode: "session" },
+      codex: { mode: "session" },
+      copilot: { mode: "session" },
+      pi: { mode: "session" },
+    },
+  });
+
+  assert.deepEqual(
+    registry
+      .descriptors()
+      .filter((action) => action.kind === "agent")
+      .map((action) => action.id),
+    ["claude", "codex", "copilot", "pi"],
+  );
 });
 
 test("builds Codex app deep link with Loupe command and repo path", () => {

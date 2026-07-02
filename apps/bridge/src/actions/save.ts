@@ -9,6 +9,7 @@ import type { Action } from "./types.js";
 export const saveAction: Action = {
   id: "save",
   label: "Save to repo",
+  kind: "builtin",
   hint: "write a committable annotation, no routing",
   run: ({ bundle }) => ({ ok: true, detail: `saved ${bundle.dir}` }),
 };

@@ -27,6 +27,7 @@ export interface ActionOutcome {
 export interface Action {
   id: string;
   label: string;
+  kind?: "builtin" | "agent" | "integration" | "custom";
   hint?: string;
   run(ctx: ActionContext): Promise<ActionOutcome> | ActionOutcome;
 }

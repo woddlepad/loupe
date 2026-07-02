@@ -73,6 +73,7 @@ interface DreamDetail extends DreamSummary {
 interface ActionDescriptor {
   id: string;
   label: string;
+  kind?: "builtin" | "agent" | "integration" | "custom";
   hint?: string;
 }
 
@@ -118,6 +119,8 @@ const PLAN_SORT_OPTIONS: { label: string; value: PlanSort }[] = [
   { label: "Title", value: "title" },
   { label: "Branch", value: "branch" },
 ];
+
+const KNOWN_AGENT_IDS = new Set(["claude", "codex", "copilot", "pi"]);
 
 const EMPTY_MARKDOWN = `## Background
 
@@ -243,7 +246,7 @@ function App() {
       const nextPlans = [...(dreams.dreams ?? [])].sort(sortDreams);
       setRepoRoot(health.repoRoot ?? repoRootParam ?? "");
       setPlans(nextPlans);
-      setActions((actionList.actions ?? []).filter((action) => action.id !== "save"));
+      setActions(providerActions(actionList.actions ?? []));
       setSelectedPlanId((current) => current || nextPlans[0]?.id || "");
       setSelectedReportId((current) => current || nextPlans.find((plan) => plan.files.report || plan.files.images.length)?.id || "");
     } finally {
@@ -531,7 +534,7 @@ function App() {
 
                         <div className="flex flex-col gap-2 sm:min-w-80">
                           <div className="grid grid-cols-2 gap-2">
-                            {providerActions(actions).map((agent) => (
+                            {actions.map((agent) => (
                               <Button
                                 className="justify-center gap-2"
                                 disabled={Boolean(draft) || Boolean(launchingAction) || selectedPlan?.status === "running"}
@@ -542,7 +545,7 @@ function App() {
                                 type="button"
                                 variant={agent.id === "claude" ? "default" : "secondary"}
                               >
-                                <ProviderIcon agent={agent.id} />
+                                <ProviderIcon action={agent} />
                                 {agent.label}
                               </Button>
                             ))}
@@ -1093,14 +1096,14 @@ function StatusPill({ icon: Icon, label }: { icon: LucideIcon; label: string }) 
   );
 }
 
-function ProviderIcon({ agent }: { agent: string }) {
-  const svg = agent.toLowerCase().includes("claude") ? CLAUDE_LOGO_SVG : OPENAI_LOGO_SVG;
+function ProviderIcon({ action }: { action: ActionDescriptor }) {
+  const svg = providerLogoSvg(action);
   return (
     <span
       aria-hidden="true"
       className={cn(
         "inline-flex size-4 shrink-0 items-center justify-center [&>svg]:block [&>svg]:size-4",
-        agent.toLowerCase().includes("claude") ? "text-[#d97757]" : "text-current",
+        providerColorClass(action),
       )}
       dangerouslySetInnerHTML={{ __html: svg }}
     />
@@ -1186,8 +1189,26 @@ function tabLabel(tab: VisualTab): string {
 }
 
 function providerActions(actions: ActionDescriptor[]): ActionDescriptor[] {
-  const preferred = actions.filter((action) => ["claude", "codex"].includes(action.id));
-  return preferred.length ? preferred : actions.slice(0, 2);
+  return actions.filter((action) => action.kind === "agent" || (action.kind === undefined && KNOWN_AGENT_IDS.has(action.id)));
+}
+
+function providerLogoSvg(action: ActionDescriptor): string {
+  const label = `${action.id} ${action.label}`.toLowerCase();
+  if (label.includes("claude")) return CLAUDE_LOGO_SVG;
+  if (label.includes("codex") || label.includes("openai")) return OPENAI_LOGO_SVG;
+  if (label.includes("copilot")) return COPILOT_LOGO_SVG;
+  if (isPi(action)) return PI_LOGO_SVG;
+  return GENERIC_AGENT_LOGO_SVG;
+}
+
+function providerColorClass(action: ActionDescriptor): string {
+  const label = `${action.id} ${action.label}`.toLowerCase();
+  if (label.includes("claude")) return "text-[#d97757]";
+  return "text-current";
+}
+
+function isPi(action: ActionDescriptor): boolean {
+  return action.id === "pi" || action.label.toLowerCase() === "pi";
 }
 
 function assetUrl(id: string, path: string, repoRootParam: string | undefined): string {
@@ -1202,5 +1223,14 @@ const CLAUDE_LOGO_SVG =
 
 const OPENAI_LOGO_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" preserveAspectRatio="xMidYMid" viewBox="0 0 256 260"><path fill="currentColor" d="M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z"/></svg>';
+
+const PI_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M4 6h16v2h-3v10h-2V8H9v10H7V8H4z"/></svg>';
+
+const COPILOT_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" preserveAspectRatio="xMidYMid" viewBox="0 0 256 208"><path fill="currentColor" d="M205.3 31.4c14 14.8 20 35.2 22.5 63.6 6.6 0 12.8 1.5 17 7.2l7.8 10.6c2.2 3 3.4 6.6 3.4 10.4v28.7a12 12 0 0 1-4.8 9.5C215.9 187.2 172.3 208 128 208c-49 0-98.2-28.3-123.2-46.6a12 12 0 0 1-4.8-9.5v-28.7c0-3.8 1.2-7.4 3.4-10.5l7.8-10.5c4.2-5.7 10.4-7.2 17-7.2 2.5-28.4 8.4-48.8 22.5-63.6C77.3 3.2 112.6 0 127.6 0h.4c14.7 0 50.4 2.9 77.3 31.4ZM128 78.7c-3 0-6.5.2-10.3.6a27.1 27.1 0 0 1-6 12.1 45 45 0 0 1-32 13c-6.8 0-13.9-1.5-19.7-5.2-5.5 1.9-10.8 4.5-11.2 11-.5 12.2-.6 24.5-.6 36.8 0 6.1 0 12.3-.2 18.5 0 3.6 2.2 6.9 5.5 8.4C79.9 185.9 105 192 128 192s48-6 74.5-18.1a9.4 9.4 0 0 0 5.5-8.4c.3-18.4 0-37-.8-55.3-.4-6.6-5.7-9.1-11.2-11-5.8 3.7-13 5.1-19.7 5.1a45 45 0 0 1-32-12.9 27.1 27.1 0 0 1-6-12.1c-3.4-.4-6.9-.5-10.3-.6Zm-27 44c5.8 0 10.5 4.6 10.5 10.4v19.2a10.4 10.4 0 0 1-20.8 0V133c0-5.8 4.6-10.4 10.4-10.4Zm53.4 0c5.8 0 10.4 4.6 10.4 10.4v19.2a10.4 10.4 0 0 1-20.8 0V133c0-5.8 4.7-10.4 10.4-10.4Zm-73-94.4c-11.2 1.1-20.6 4.8-25.4 10-10.4 11.3-8.2 40.1-2.2 46.2A31.2 31.2 0 0 0 75 91.7c6.8 0 19.6-1.5 30.1-12.2 4.7-4.5 7.5-15.7 7.2-27-.3-9.1-2.9-16.7-6.7-19.9-4.2-3.6-13.6-5.2-24.2-4.3Zm69 4.3c-3.8 3.2-6.4 10.8-6.7 19.9-.3 11.3 2.5 22.5 7.2 27a41.7 41.7 0 0 0 30 12.2c8.9 0 17-2.9 21.3-7.2 6-6.1 8.2-34.9-2.2-46.3-4.8-5-14.2-8.8-25.4-9.9-10.6-1-20 .7-24.2 4.3ZM128 56c-2.6 0-5.6.2-9 .5.4 1.7.5 3.7.7 5.7 0 1.5 0 3-.2 4.5 3.2-.3 6-.3 8.5-.3 2.6 0 5.3 0 8.5.3-.2-1.6-.2-3-.2-4.5.2-2 .3-4 .7-5.7-3.4-.3-6.4-.5-9-.5Z"/></svg>';
+
+const GENERIC_AGENT_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3v3m-6 5a6 6 0 0 1 12 0v5.5A2.5 2.5 0 0 1 15.5 19h-7A2.5 2.5 0 0 1 6 16.5V11Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9 13h.01M15 13h.01M10 16h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 createRoot(document.getElementById("root")!).render(<App />);

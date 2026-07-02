@@ -40,6 +40,11 @@ export class ActionRegistry {
 
   /** Public descriptors for the panel (order: save, agents, integrations, custom). */
   descriptors(): ActionDescriptor[] {
-    return [...this.actions.values()].map((a) => ({ id: a.id, label: a.label, hint: a.hint }));
+    return [...this.actions.values()].map((a) => ({
+      id: a.id,
+      label: a.label,
+      kind: a.kind,
+      hint: a.hint,
+    }));
   }
 }
