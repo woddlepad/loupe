@@ -10,6 +10,7 @@ import type {
 /** Messages exchanged between the content script and the background worker. */
 export type LoupeMessage =
   | { type: "toggle" }
+  | { type: "toggle-frozen" }
   | { type: "toggle-view" }
   | { type: "popup-annotate" }
   | { type: "popup-view" }
@@ -17,6 +18,7 @@ export type LoupeMessage =
   | { type: "groups" }
   | { type: "list" }
   | { type: "recordings" }
+  | { type: "capture-visible" }
   | { type: "capture"; rect: Rect; devicePixelRatio: number }
   | { type: "annotate"; payload: AnnotatePayload }
   | { type: "update-annotation"; id: string; patch: { note?: string; status?: AnnotationStatus; label?: string } }
@@ -34,6 +36,7 @@ export type LoupeMessage =
   | { type: "resolve-target"; target: AnnotationTarget }
   | { type: "references" }
   | { type: "reference-image"; id: string }
+  | { type: "file-data-url"; dir: string; file: string }
   | { type: "delete-reference"; id: string }
   | { type: "delete-reference-page"; url: string }
   | { type: "save-reference"; annotation: Annotation }
@@ -79,6 +82,9 @@ export type ReferencesResult =
   | { ok: true; references: ReferenceItem[] }
   | { ok: false; error: string };
 export type ReferenceImageResult =
+  | { ok: true; dataUrl: string }
+  | { ok: false; error: string };
+export type FileDataResult =
   | { ok: true; dataUrl: string }
   | { ok: false; error: string };
 export type RecordingFileResult =
