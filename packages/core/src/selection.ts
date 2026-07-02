@@ -35,6 +35,8 @@ export interface LoupeOverlayOptions {
   captureTarget?: (element: Element) => AnnotationTarget | Promise<AnnotationTarget>;
   /** Draft to restore after a page reload or content-script remount. */
   draft?: LoupeOverlayDraft | null;
+  /** Frozen visible-tab image shown behind the selection surface. */
+  frozenScreenshotUrl?: string | null;
   /** Called whenever the in-progress annotation draft changes; null clears it. */
   onDraftChange?: (draft: LoupeOverlayDraft | null) => void | Promise<void>;
   /** Called when the overlay is disabled (Esc, toggle, or after submit). */
@@ -128,6 +130,7 @@ export class LoupeOverlay {
   private recording: RecordingCapture | null = null;
   private recordStartedAt = 0;
   private recordTimer: number | null = null;
+  private frozenScreenshotEl: HTMLImageElement | null = null;
 
   // --- React editing panel state (owned here; the panel is fully controlled) ---
   private editRoot: Root | null = null;
@@ -153,6 +156,7 @@ export class LoupeOverlay {
       generateId: defaultId,
       captureTarget: defaultCaptureTarget,
       draft: null,
+      frozenScreenshotUrl: null,
       onDraftChange: () => {},
       onDisable: () => {},
       onSelectionCapture: async () => undefined,
@@ -253,6 +257,7 @@ export class LoupeOverlay {
     for (const node of Array.from(this.root.children)) {
       if (node.tagName !== "STYLE") node.remove();
     }
+    this.frozenScreenshotEl = null;
   }
 
   /** Unmount the React editing panel and drop its per-session handles. */
@@ -278,6 +283,7 @@ export class LoupeOverlay {
     this.moveHostTo(document.body);
     this.clearLayer();
     if (!this.root) return;
+    this.appendFrozenScreenshot();
     const layer = el("div", { class: C.layer });
     layer.style.pointerEvents = "none";
     const inspectBox = el("div", { class: C.inspectBox, "data-loupe-inspect-box": "" });
@@ -451,6 +457,7 @@ export class LoupeOverlay {
   private renderDragging(): void {
     this.clearLayer();
     if (!this.root) return;
+    this.appendFrozenScreenshot();
     const layer = el("div", { class: C.layer });
     layer.style.pointerEvents = "none";
     layer.append(el("div", { class: C.dim }));
@@ -458,6 +465,27 @@ export class LoupeOverlay {
     layer.append(renderBrandFooter("viewport"));
     this.root.append(layer);
     this.updateMarquee();
+  }
+
+  private appendFrozenScreenshot(): void {
+    if (!this.root || !this.opts.frozenScreenshotUrl) return;
+    const img = document.createElement("img");
+    img.src = this.opts.frozenScreenshotUrl;
+    img.alt = "";
+    img.setAttribute("aria-hidden", "true");
+    img.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "width:100vw",
+      "height:100vh",
+      "object-fit:fill",
+      "z-index:2147483645",
+      "pointer-events:none",
+      "user-select:none",
+      "background:transparent",
+    ].join(";");
+    this.frozenScreenshotEl = img;
+    this.root.append(img);
   }
 
   private updateMarquee(): void {
@@ -625,6 +653,7 @@ export class LoupeOverlay {
     this.moveHostTo(document.body);
     this.clearLayer();
     if (!this.root) return;
+    this.appendFrozenScreenshot();
 
     const frameDoc = this.mountEditingFrame();
     if (!frameDoc) return;

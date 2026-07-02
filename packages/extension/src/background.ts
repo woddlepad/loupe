@@ -9,6 +9,7 @@ import type {
   RecordingFileResult,
   RecordingResult,
   RecordingsResult,
+  FileDataResult,
   ReferenceImageResult,
   ReferencesResult,
   ResolveResult,
@@ -24,6 +25,7 @@ import { bridgeUrlForUrl, loadSettings } from "./settings.js";
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === "toggle-loupe") void toggleActiveTab("toggle");
+  if (command === "toggle-frozen-loupe") void toggleActiveTab("toggle-frozen");
   if (command === "toggle-view") void toggleActiveTab("toggle-view");
 });
 
@@ -38,7 +40,7 @@ void chrome.storage.session
  * there yet (e.g. the tab was open before the extension loaded), inject it on
  * demand and retry — so the user never has to manually reload the page.
  */
-async function toggleActiveTab(type: "toggle" | "toggle-view"): Promise<{ ok: boolean; error?: string }> {
+async function toggleActiveTab(type: "toggle" | "toggle-frozen" | "toggle-view"): Promise<{ ok: boolean; error?: string }> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return { ok: false, error: "no active tab" };
   if (tab.url && RESTRICTED.some((p) => tab.url!.startsWith(p))) {
@@ -187,6 +189,16 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .then((b) => sendResponse({ ok: true, dataUrl: b.dataUrl } satisfies ReferenceImageResult))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies ReferenceImageResult));
       return true;
+    case "capture-visible":
+      captureVisible(sender.tab?.windowId)
+        .then((dataUrl) => sendResponse({ ok: true, dataUrl } satisfies CaptureResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies CaptureResult));
+      return true;
+    case "file-data-url":
+      bridgeFileDataUrl(msg.dir, msg.file, senderUrl(sender))
+        .then((dataUrl) => sendResponse({ ok: true, dataUrl } satisfies FileDataResult))
+        .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies FileDataResult));
+      return true;
     case "recording-file":
       bridgeGet(`/recording-file?path=${encodeURIComponent(`${msg.dir}/${msg.file}`)}`, senderUrl(sender))
         .then((b) =>
@@ -247,9 +259,7 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
 });
 
 async function capture(rect: Rect, dpr: number, windowId?: number): Promise<string> {
-  const full = await chrome.tabs.captureVisibleTab(windowId ?? chrome.windows.WINDOW_ID_CURRENT, {
-    format: "png",
-  });
+  const full = await captureVisible(windowId);
   const bitmap = await createImageBitmap(await (await fetch(full)).blob());
 
   const sx = Math.max(0, Math.round(rect.x * dpr));
@@ -265,6 +275,12 @@ async function capture(rect: Rect, dpr: number, windowId?: number): Promise<stri
 
   const blob = await canvas.convertToBlob({ type: "image/png" });
   return await blobToDataUrl(blob);
+}
+
+async function captureVisible(windowId?: number): Promise<string> {
+  return await chrome.tabs.captureVisibleTab(windowId ?? chrome.windows.WINDOW_ID_CURRENT, {
+    format: "png",
+  });
 }
 
 async function deliver(payload: AnnotatePayload): Promise<AnnotateResult> {
@@ -436,6 +452,14 @@ async function bridgePost(path: string, body: unknown, pageUrl?: string): Promis
   });
   if (!res.ok) throw new Error(await responseError(res));
   return res.json();
+}
+
+async function bridgeFileDataUrl(dir: string, file: string, pageUrl?: string): Promise<string> {
+  const url = new URL(await bridgeRequestUrl("/file", pageUrl));
+  url.searchParams.set("path", `${dir}/${file}`);
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error(await responseError(res));
+  return blobToDataUrl(await res.blob());
 }
 
 async function deleteAnnotation(id: string, pageUrl?: string): Promise<void> {
