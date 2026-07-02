@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotation, AnnotatePayload, AnnotationStatus } from "@loupe/core/model";
-import { agentAvailability, runAgentGroup } from "./actions/agent.js";
+import { agentAvailability, runAgentGroup, runDreamAgent } from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
 import type { ActionOutcome } from "./actions/types.js";
 import { writeBundle, writeRecordingBundle, writeReference, type WrittenBundle } from "./bundle.js";
@@ -142,6 +142,12 @@ async function handleRequest(
   const dreamAsset = path.match(/^\/dreams\/([^/]+)\/asset$/);
   if (method === "GET" && dreamAsset) {
     return serveDreamAsset(res, config.repoRoot, decodeURIComponent(dreamAsset[1]!), url.searchParams.get("path") ?? "");
+  }
+  const dreamRun = path.match(/^\/dreams\/([^/]+)\/run$/);
+  if (method === "POST" && dreamRun) {
+    return withBody(req, res, (b) =>
+      handleDreamRun(config, decodeURIComponent(dreamRun[1]!), JSON.parse(b) as { action?: string }),
+    );
   }
   const dreamDetail = path.match(/^\/dreams\/([^/]+)$/);
   if (method === "GET" && dreamDetail) {
@@ -548,6 +554,40 @@ function handleWriteDream(config: BridgeConfig, body: DreamWriteInput) {
   const dream = writeDream(config.repoRoot, body);
   console.log(`[loupe] dream ${dream.dir}`);
   return { ok: true, dream };
+}
+
+async function handleDreamRun(
+  config: BridgeConfig,
+  id: string,
+  body: { action?: string },
+): Promise<{ ok: boolean; action: string; detail?: string; dream?: unknown; url?: string }> {
+  const action = body.action?.trim();
+  if (!action) throw new Error("missing action");
+  const cmd = config.agents[action];
+  if (!cmd) throw new Error(`unknown dream agent "${action}"`);
+  const dream = readDream(config.repoRoot, id);
+  if (!dream) throw new Error(`dream ${id} not found`);
+  if (dream.status === "running") {
+    return { ok: false, action, detail: `dream ${id} is already running` };
+  }
+
+  const logPath = resolve(config.repoRoot, dream.dir, `agent-${action}.log`);
+  const outcome = await runDreamAgent(action, cmd, config, dream, logPath);
+  console.log(`[loupe] dream "${id}" → ${action}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
+  if (!outcome.ok) return { ok: false, action, detail: outcome.detail, url: outcome.url };
+
+  writeDream(config.repoRoot, {
+    id: dream.id,
+    title: dream.title,
+    goal: dream.goal,
+    summary: dream.summary,
+    status: "running",
+    priority: dream.priority,
+    recommended: dream.recommended,
+    branch: dream.branch,
+    source: dream.source,
+  });
+  return { ok: true, action, detail: outcome.detail, url: outcome.url, dream: readDream(config.repoRoot, id) };
 }
 
 function handleDeleteDream(res: ServerResponse, config: BridgeConfig, id: string): void {

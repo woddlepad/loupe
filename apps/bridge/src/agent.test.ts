@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { codexBackgroundAgent, defaultAgents, type AgentCommand } from "./config.js";
-import { agentAvailable, buildCodexUrl, defaultCodexAppServerSocketPath, expandAgentArgv } from "./actions/agent.js";
+import { agentAvailable, buildCodexUrl, buildDreamLaunchPrompt, defaultCodexAppServerSocketPath, expandAgentArgv } from "./actions/agent.js";
+import type { DreamDetail } from "./dreams.js";
 
 test("expands Claude default to background Loupe slash command", () => {
   const cmd: AgentCommand = { mode: "spawn", argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] };
@@ -113,6 +114,38 @@ test("builds default Codex app-server socket path from CODEX_HOME", () => {
     if (previous === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previous;
   }
+});
+
+test("builds Dreamer implementation launch prompt with goal and ship-feature", () => {
+  const dream: DreamDetail = {
+    id: "notes-as-layouts",
+    title: "Notes as Layouts",
+    goal: "Ship notes as switchable document, page, and slide layouts.",
+    summary: "Implement the saved Dreamer plan.",
+    status: "planned",
+    priority: 1,
+    recommended: true,
+    branch: "main",
+    createdAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:00.000Z",
+    dir: ".loupe/dreams/notes-as-layouts",
+    files: {
+      plan: "plan.mdx",
+      canvas: "canvas.mdx",
+      images: [],
+    },
+    content: {
+      plan: "# Notes as Layouts\n",
+      canvas: "## Flow\n",
+    },
+  };
+
+  const prompt = buildDreamLaunchPrompt(dream);
+  assert.match(prompt, /^\/goal Ship notes as switchable document, page, and slide layouts\./);
+  assert.match(prompt, /Use the ship-feature skill/);
+  assert.match(prompt, /This is an implementation launch, not a request to create another dream/);
+  assert.match(prompt, /\.loupe\/dreams\/notes-as-layouts\/plan\.mdx/);
+  assert.match(prompt, /\.loupe\/dreams\/notes-as-layouts\/report\.md/);
 });
 
 function restoreEnv(name: string, value: string | undefined): void {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createConnection, type Socket } from "node:net";
 import type { Annotation } from "@loupe/core/model";
 import type { AgentCommand, BridgeConfig } from "../config.js";
+import type { DreamDetail } from "../dreams.js";
 import type { WrittenBundle } from "../bundle.js";
 import type { SourceResolution } from "../resolve/index.js";
 import type { StoredAnnotation } from "../store.js";
@@ -97,6 +98,59 @@ export function runAgentGroup(
   if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, `/loupe ${group}`);
   const prompt = buildGroupPrompt(name, group, annotations);
   return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath);
+}
+
+/** Run one configured bridge agent against a saved Dreamer implementation plan. */
+export function runDreamAgent(
+  name: string,
+  cmd: AgentCommand,
+  config: BridgeConfig,
+  dream: DreamDetail,
+  logPath: string,
+): ActionOutcome | Promise<ActionOutcome> {
+  const launchPrompt = buildDreamLaunchPrompt(dream);
+  if (cmd.mode === "session") {
+    return {
+      ok: true,
+      detail: `saved dream ${dream.id} — pick it up in your open ${name} session`,
+    };
+  }
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, launchPrompt);
+  if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, launchPrompt);
+  return spawnAgent(name, cmd, config.repoRoot, launchPrompt, launchPrompt, undefined, [], logPath);
+}
+
+export function buildDreamLaunchPrompt(dream: DreamDetail): string {
+  const goal = dream.goal?.trim() || `Implement the Dreamer plan "${dream.title}"`;
+  const planPath = `${dream.dir}/plan.mdx`;
+  const visualPaths = [
+    dream.files.canvas ? `${dream.dir}/${dream.files.canvas}` : "",
+    dream.files.prototype ? `${dream.dir}/${dream.files.prototype}` : "",
+    dream.files.prototypeHtml ? `${dream.dir}/${dream.files.prototypeHtml}` : "",
+    ...dream.files.images.map((image) => `${dream.dir}/${image}`),
+  ].filter(Boolean);
+
+  return [
+    `/goal ${goal}`,
+    "",
+    "Use the ship-feature skill to implement this saved Loupe Dreamer plan end to end. This is an implementation launch, not a request to create another dream.",
+    "",
+    `Dream id: ${dream.id}`,
+    `Title: ${dream.title}`,
+    dream.summary ? `Summary: ${dream.summary}` : "",
+    `Plan: ${planPath}`,
+    visualPaths.length ? `Visual plan artifacts: ${visualPaths.join(", ")}` : "",
+    dream.branch ? `Target branch/ref context: ${dream.branch}` : "",
+    "",
+    "Requirements:",
+    "- Follow the repository AGENTS.md and local conventions exactly.",
+    "- Treat the Dreamer plan as the source of truth, including success criteria, repo anchors, verification, and UX expectations.",
+    "- If the plan is stale or contradicted by the repo, stop and report the exact blocker instead of inventing a different feature.",
+    "- Implement with the best achievable product quality; use real browser review when UI behavior is in scope.",
+    `- When finished, write a concise implementation report to ${dream.dir}/report.md with summary, changed files, verification commands/results, screenshots or artifact paths if applicable, and remaining risks.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function openCodexApp(name: string, repoRoot: string, loupeCommand: string): ActionOutcome {
