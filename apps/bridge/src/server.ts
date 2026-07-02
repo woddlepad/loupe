@@ -16,6 +16,8 @@ import {
 import { matchingProjects, readProjectRegistry, type LoupeProjectConfig, type RegisteredProject } from "./project.js";
 import { Resolver } from "./resolve/index.js";
 import type { SourceResolution } from "./resolve/index.js";
+import { deleteDream, dreamAssetPath, listDreams, readDream, writeDream, type DreamWriteInput } from "./dreams.js";
+import { dreamerHtml } from "./dreamer-ui.js";
 import {
   addAnnotationReference,
   createGroup,
@@ -120,6 +122,33 @@ async function handleRequest(
     repoRoot,
     codexLaunchMode,
   );
+
+  if (method === "GET" && (path === "/" || path === "/dreamer")) {
+    return html(res, 200, dreamerHtml());
+  }
+  if (method === "GET" && path === "/dreams") {
+    return json(res, 200, { repoRoot: config.repoRoot, dreams: listDreams(config.repoRoot) });
+  }
+  if (method === "POST" && path === "/dreams") {
+    return withBody(req, res, (b) => handleWriteDream(config, JSON.parse(b) as DreamWriteInput));
+  }
+  const dreamAsset = path.match(/^\/dreams\/([^/]+)\/asset$/);
+  if (method === "GET" && dreamAsset) {
+    return serveDreamAsset(res, config.repoRoot, decodeURIComponent(dreamAsset[1]!), url.searchParams.get("path") ?? "");
+  }
+  const dreamDetail = path.match(/^\/dreams\/([^/]+)$/);
+  if (method === "GET" && dreamDetail) {
+    const dream = readDream(config.repoRoot, decodeURIComponent(dreamDetail[1]!));
+    if (!dream) return json(res, 404, { error: "dream not found" });
+    return json(res, 200, dream);
+  }
+  if (method === "DELETE" && dreamDetail) {
+    return handleDeleteDream(res, config, decodeURIComponent(dreamDetail[1]!));
+  }
+  const dreamDeletePost = path.match(/^\/dreams\/([^/]+)\/delete$/);
+  if (method === "POST" && dreamDeletePost) {
+    return handleDeleteDream(res, config, decodeURIComponent(dreamDeletePost[1]!));
+  }
 
   if (method === "GET" && path === "/health") {
     return json(res, 200, {
@@ -507,6 +536,20 @@ function handleDeleteReference(res: ServerResponse, config: BridgeConfig, id: st
   return json(res, 200, { ok: true });
 }
 
+function handleWriteDream(config: BridgeConfig, body: DreamWriteInput) {
+  if (!body.title?.trim()) throw new Error("missing dream title");
+  const dream = writeDream(config.repoRoot, body);
+  console.log(`[loupe] dream ${dream.dir}`);
+  return { ok: true, dream };
+}
+
+function handleDeleteDream(res: ServerResponse, config: BridgeConfig, id: string): void {
+  const ok = deleteDream(config.repoRoot, id);
+  if (!ok) return json(res, 404, { ok: false, error: `dream ${id} not found` });
+  console.log(`[loupe] deleted dream ${id}`);
+  return json(res, 200, { ok: true });
+}
+
 function handleDeleteReferencesForPage(config: BridgeConfig, body: { url?: string }) {
   const url = body.url?.trim();
   if (!url) throw new Error("missing reference page url");
@@ -685,6 +728,22 @@ function serveFile(res: ServerResponse, repoRoot: string, rel: string): void {
   res.end(readFileSync(abs));
 }
 
+function serveDreamAsset(res: ServerResponse, repoRoot: string, id: string, rel: string): void {
+  const abs = dreamAssetPath(repoRoot, id, rel);
+  if (!abs) return end(res, 404, "");
+  const types: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+  };
+  res.writeHead(200, { "content-type": types[extname(abs).toLowerCase()] ?? "application/octet-stream" });
+  res.end(readFileSync(abs));
+}
+
 /** Read a text telemetry file (network.jsonl, console.log, …) from `.loupe/`. */
 function serveTextFile(
   repoRoot: string,
@@ -721,6 +780,11 @@ function cors(res: ServerResponse): void {
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function html(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  res.end(body);
 }
 
 function end(res: ServerResponse, status: number, body: string): void {

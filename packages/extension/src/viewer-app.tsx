@@ -45,7 +45,7 @@ import type {
   SimpleResult,
   StoredAnnotation,
 } from "./messages.js";
-import { bridgeUrlForUrl, enabledActions, loadSettings } from "./settings.js";
+import { bridgeUrlForUrl, dreamerUrl, enabledActions, loadSettings } from "./settings.js";
 import {
   Badge,
   Button,
@@ -144,6 +144,11 @@ function ModeToolbar({
   );
 }
 
+function openDreamer(url: string): void {
+  if (!url) return;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 export function ViewerApp({ onClose, panelRoot = null, overlayContainer = null, panelEmbedded = false, onCollapsedChange, onCollapsedWidthChange, onModeChange, onReady }: ViewerAppProps) {
   const [mode, setMode] = React.useState<LoupeMode>("select");
   const [annotations, setAnnotations] = React.useState<StoredAnnotation[]>([]);
@@ -154,6 +159,7 @@ export function ViewerApp({ onClose, panelRoot = null, overlayContainer = null, 
   const [author, setAuthor] = React.useState("me");
   const [bridgeUrl, setBridgeUrl] = React.useState("http://localhost:7337");
   const [repoRoot, setRepoRoot] = React.useState<string | undefined>(undefined);
+  const [dreamerHref, setDreamerHref] = React.useState("");
   const [filter, setFilter] = React.useState<ViewerFilter>("review");
   const [query, setQuery] = React.useState("");
   const [viewMenuOpen, setViewMenuOpen] = React.useState(false);
@@ -234,8 +240,23 @@ export function ViewerApp({ onClose, panelRoot = null, overlayContainer = null, 
     setActions(enabledActions(actionList, settings));
     setGroups(groupList);
     setAuthor(settings.author);
-    setBridgeUrl(bridgeUrlForUrl(settings, location.href));
-    setRepoRoot(settings.activeRepoRoot);
+    const nextBridgeUrl = bridgeUrlForUrl(settings, location.href);
+    setBridgeUrl(nextBridgeUrl);
+    let nextRepoRoot = settings.activeRepoRoot;
+    try {
+      const projectsUrl = new URL("/projects", `${nextBridgeUrl}/`);
+      projectsUrl.searchParams.set("pageUrl", location.href);
+      if (settings.activeRepoRoot) projectsUrl.searchParams.set("repoRoot", settings.activeRepoRoot);
+      const projectRes = await fetch(projectsUrl);
+      if (projectRes.ok) {
+        const body = (await projectRes.json()) as { selected?: { repoRoot?: string } };
+        nextRepoRoot = body.selected?.repoRoot ?? nextRepoRoot;
+      }
+    } catch {
+      // Dreamer falls back to the bridge's default repo when project resolution is unavailable.
+    }
+    setRepoRoot(nextRepoRoot);
+    setDreamerHref(dreamerUrl(nextBridgeUrl, nextRepoRoot));
   }, []);
 
   React.useEffect(() => {
@@ -488,6 +509,16 @@ export function ViewerApp({ onClose, panelRoot = null, overlayContainer = null, 
             </span>
           </button>
           <ModeToolbar mode={mode} onModeChange={changeMode} compact />
+          <Button
+            data-loupe-panel-no-drag=""
+            variant="ghost"
+            size="icon-sm"
+            title="Open Dreamer"
+            disabled={!dreamerHref}
+            onClick={() => openDreamer(dreamerHref)}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
         </div>
       ) : (
         <section
@@ -515,6 +546,9 @@ export function ViewerApp({ onClose, panelRoot = null, overlayContainer = null, 
               />
             </div>
             <div className="ml-auto" />
+            <Button data-loupe-panel-no-drag="" variant="ghost" size="icon-sm" title="Open Dreamer" disabled={!dreamerHref} onClick={() => openDreamer(dreamerHref)}>
+              <ExternalLink className="h-4 w-4" />
+            </Button>
             <Button data-loupe-panel-no-drag="" variant="ghost" size="icon-sm" title="Collapse annotations" onClick={() => setViewerCollapsed(true)}>
               <Minus className="h-4 w-4" />
             </Button>
