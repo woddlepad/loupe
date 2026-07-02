@@ -44,7 +44,7 @@ button:not(:disabled),
     grid-template-columns: minmax(12rem, clamp(12rem, 32vw, 22rem)) minmax(0, 1fr);
     isolation: isolate;
     min-height: 0;
-    padding-block: 1rem;
+    padding-block: 0.75rem;
   }
 
   .dreamer-sidebar,
