@@ -389,32 +389,32 @@ function App() {
     <main className="h-svh overflow-hidden bg-background text-foreground">
       <div
         className={cn(
-          "mx-auto grid h-full w-full grid-rows-[auto_minmax(0,1fr)] px-4 py-4 sm:px-6 lg:px-8",
+          "mx-auto grid h-full w-full grid-rows-[auto_minmax(0,1fr)] px-4 py-2 sm:px-6 lg:px-8",
           isEditing ? "max-w-none" : "max-w-7xl",
         )}
       >
-        <header className="border-b border-border pb-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div className="space-y-1">
-              <h1 className="text-3xl font-semibold tracking-tight">Dreamer</h1>
-              <p className="max-w-2xl text-sm text-muted-foreground">
+        <header className="border-b border-border pb-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-0.5">
+              <h1 className="text-2xl font-semibold tracking-tight">Dreamer</h1>
+              <p className="max-w-2xl text-xs text-muted-foreground">
                 Review, edit, and launch overnight agent work from one place.
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Button onClick={() => setMode("plans")} type="button" variant={mode === "plans" ? "default" : "secondary"}>
+            <div className="flex items-center gap-1.5">
+              <Button onClick={() => setMode("plans")} size="sm" type="button" variant={mode === "plans" ? "default" : "secondary"}>
                 Plans
               </Button>
-              <Button onClick={() => setMode("reports")} type="button" variant={mode === "reports" ? "default" : "secondary"}>
+              <Button onClick={() => setMode("reports")} size="sm" type="button" variant={mode === "reports" ? "default" : "secondary"}>
                 Reports
               </Button>
-              <Button className="gap-2" onClick={beginCreatePlan} type="button" variant="outline">
-                <Plus className="size-4" />
+              <Button className="gap-1.5" onClick={beginCreatePlan} size="sm" type="button" variant="outline">
+                <Plus className="size-3.5" />
                 New plan
               </Button>
               {isEditing ? (
-                <Button className="gap-2" onClick={closeEditor} type="button" variant="outline">
-                  <X className="size-4" />
+                <Button className="gap-1.5" onClick={closeEditor} size="sm" type="button" variant="outline">
+                  <X className="size-3.5" />
                   Back to plans
                 </Button>
               ) : null}
