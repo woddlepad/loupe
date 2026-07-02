@@ -1,11 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "jsx": "react-jsx",
     "types": ["node"],
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "paths": {
       "@loupe/core": ["../../packages/core/src/index.ts"],
-      "@loupe/core/model": ["../../packages/core/src/model.ts"]
+      "@loupe/core/model": ["../../packages/core/src/model.ts"],
+      "@loupe/ui": ["../../packages/ui/src/index.ts"]
     }
   },
   "include": ["src"]

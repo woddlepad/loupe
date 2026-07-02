@@ -1,0 +1,148 @@
+@import "@loupe/ui/styles/tokens.css";
+@import "@loupe/ui/styles/fonts.css";
+
+@source "./**/*.{ts,tsx}";
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
+
+.dark {
+  --background: #080808;
+  --foreground: #f4f4f4;
+  --card: #151515;
+  --card-foreground: #f4f4f4;
+  --popover: #151515;
+  --popover-foreground: #f4f4f4;
+  --primary: #e8e8e8;
+  --primary-foreground: #101010;
+  --secondary: #242424;
+  --secondary-foreground: #f4f4f4;
+  --muted: #242424;
+  --muted-foreground: #a3a3a3;
+  --accent: #272727;
+  --accent-foreground: #f4f4f4;
+  --border: #303030;
+  --input: #303030;
+  --ring: #666666;
+  --radius: 0.5rem;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+button:not(:disabled),
+[role="button"]:not(:disabled) {
+  cursor: pointer;
+}
+
+@layer components {
+  .dreamer-two-pane-layout {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(12rem, clamp(12rem, 32vw, 22rem)) minmax(0, 1fr);
+    isolation: isolate;
+    min-height: 0;
+    padding-block: 1rem;
+  }
+
+  .dreamer-sidebar,
+  .dreamer-sidebar-section,
+  .dreamer-detail-pane,
+  .dreamer-plan-button {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .dreamer-sidebar {
+    overflow: hidden;
+    position: relative;
+    z-index: 1;
+  }
+
+  .dreamer-sidebar-section,
+  .dreamer-plan-button {
+    overflow: hidden;
+  }
+
+  .dreamer-detail-pane {
+    position: relative;
+    z-index: 2;
+  }
+
+  .dreamer-edit-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dreamer-plan-button {
+    width: 100%;
+  }
+
+  .markdown-body {
+    @apply text-sm leading-7 text-foreground;
+  }
+
+  .markdown-body h1 {
+    @apply mb-4 text-2xl font-semibold tracking-tight;
+  }
+
+  .markdown-body h2 {
+    @apply mt-8 mb-3 border-b pb-2 text-xl font-semibold tracking-tight;
+  }
+
+  .markdown-body h3 {
+    @apply mt-6 mb-2 text-base font-semibold;
+  }
+
+  .markdown-body p {
+    @apply my-3 text-foreground/90;
+  }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply my-3 pl-5;
+  }
+
+  .markdown-body ul {
+    @apply list-disc;
+  }
+
+  .markdown-body ol {
+    @apply list-decimal;
+  }
+
+  .markdown-body li {
+    @apply my-1 pl-1;
+  }
+
+  .markdown-body code {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+  }
+
+  .markdown-body pre {
+    @apply my-4 overflow-auto rounded-lg border bg-muted p-4;
+  }
+
+  .markdown-body pre code {
+    @apply bg-transparent p-0 text-sm;
+  }
+
+  .markdown-body table {
+    @apply my-4 w-full border-collapse text-sm;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    @apply border px-3 py-2 align-top;
+  }
+
+  .markdown-body th {
+    @apply bg-muted text-left font-medium;
+  }
+
+  .dreamer-mermaid svg {
+    max-width: 100%;
+  }
+}
