@@ -121,8 +121,8 @@ export function runDreamAgent(
 }
 
 export function buildDreamLaunchPrompt(dream: DreamDetail): string {
-  const goal = dream.goal?.trim() || `Implement the Dreamer plan "${dream.title}"`;
   const planPath = `${dream.dir}/plan.mdx`;
+  const goal = `Complete the goal in ${planPath}.`;
   const visualPaths = [
     dream.files.canvas ? `${dream.dir}/${dream.files.canvas}` : "",
     dream.files.prototype ? `${dream.dir}/${dream.files.prototype}` : "",

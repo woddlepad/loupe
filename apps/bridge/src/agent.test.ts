@@ -141,7 +141,8 @@ test("builds Dreamer implementation launch prompt with goal and ship-feature", (
   };
 
   const prompt = buildDreamLaunchPrompt(dream);
-  assert.match(prompt, /^\/goal Ship notes as switchable document, page, and slide layouts\./);
+  assert.match(prompt, /^\/goal Complete the goal in \.loupe\/dreams\/notes-as-layouts\/plan\.mdx\./);
+  assert.doesNotMatch(prompt.split("\n")[0]!, /switchable document/);
   assert.match(prompt, /Use the ship-feature skill/);
   assert.match(prompt, /This is an implementation launch, not a request to create another dream/);
   assert.match(prompt, /\.loupe\/dreams\/notes-as-layouts\/plan\.mdx/);
