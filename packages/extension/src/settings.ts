@@ -70,6 +70,12 @@ export function bridgeUrlForUrl(settings: LoupeSettings, pageUrl: string | undef
   return cleanBridgeUrl(settings.bridgeUrl);
 }
 
+export function dreamerUrl(bridgeUrl: string, repoRoot: string | undefined): string {
+  const url = new URL("/dreamer", `${cleanBridgeUrl(bridgeUrl)}/`);
+  if (repoRoot) url.searchParams.set("repoRoot", repoRoot);
+  return url.toString();
+}
+
 export function cleanBridgeUrl(url: string): string {
   return (url || DEFAULT_SETTINGS.bridgeUrl).trim().replace(/\/$/, "");
 }

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { AnnotationStatus } from "@loupe/core/model";
 import { createBridge } from "./server.js";
 import { loadConfig } from "./config.js";
+import { listDreams, readDream } from "./dreams.js";
 import { initProject } from "./project.js";
 import { groupSummaries, listAnnotations, listRecordings, setAnnotationStatus, updateAnnotation, type StoredAnnotation } from "./store.js";
 
@@ -19,6 +20,9 @@ async function main(): Promise<void> {
   if (cmd === "init") return init(args.slice(1));
   if (cmd === "bridge" || cmd === "start") return bridge(args.slice(1));
   if (cmd === "list" || cmd === "ls") return list(args.slice(1));
+  if (cmd === "dreams") return dreams(args.slice(1));
+  if (cmd === "dream") return dream(args.slice(1));
+  if (cmd === "dreamer") return dreamer(args.slice(1));
   if (cmd === "show") return show(args.slice(1));
   if (cmd === "status") return status(args.slice(1));
   if (cmd === "title") return title(args.slice(1));
@@ -106,6 +110,48 @@ function list(args: string[]): void {
   }
 }
 
+function dreams(args: string[]): void {
+  const repo = repoRoot(args);
+  const items = listDreams(repo);
+  if (hasFlag(args, "--json")) {
+    console.log(JSON.stringify({ repo, dreams: items }, null, 2));
+    return;
+  }
+  console.log(`Loupe dreams in ${repo}\n`);
+  if (items.length === 0) {
+    console.log("No dreams found.");
+    return;
+  }
+  for (const item of items) {
+    const marker = item.recommended ? "tonight" : item.status ?? "planned";
+    console.log(`${item.id}  ${marker}  ${item.title}`);
+    if (item.summary) console.log(`  ${item.summary}`);
+    console.log(`  ${resolve(repo, item.dir)}`);
+  }
+}
+
+function dream(args: string[]): void {
+  const id = args.find((arg) => !arg.startsWith("-"));
+  if (!id) throw new Error("usage: loupe dream <dream_id> [--repo <path>] [--json]");
+  const repo = repoRoot(args);
+  const item = readDream(repo, id);
+  if (!item) throw new Error(`dream ${id} not found`);
+  if (hasFlag(args, "--json")) {
+    console.log(JSON.stringify({ repo, dream: item }, null, 2));
+    return;
+  }
+  console.log(renderDream(repo, item));
+}
+
+function dreamer(args: string[]): void {
+  const repo = repoRoot(args);
+  const config = loadConfig({ repoRoot: repo });
+  const host = strFlag(args, "--host") ?? config.host;
+  const port = numFlag(args, "--port") ?? config.port;
+  const browserHost = host === "0.0.0.0" || host === "::" ? "localhost" : host;
+  console.log(`http://${browserHost}:${port}/dreamer?repoRoot=${encodeURIComponent(repo)}`);
+}
+
 function show(args: string[]): void {
   const target = args.find((arg) => !arg.startsWith("-"));
   if (!target) throw new Error("usage: loupe show <group|annotation_id> [--repo <path>] [--json]");
@@ -145,18 +191,25 @@ function title(args: string[]): void {
 function installSkill(): void {
   const root = distributionRoot();
   const codexSkill = resolve(process.env["CODEX_HOME"] ?? resolve(process.env["HOME"] ?? "~", ".codex"), "skills/loupe");
+  const codexDreamSkill = resolve(process.env["CODEX_HOME"] ?? resolve(process.env["HOME"] ?? "~", ".codex"), "skills/dream");
   const claudeCommands = resolve(process.env["HOME"] ?? "~", ".claude/commands");
   const claudeCommand = resolve(claudeCommands, "loupe.md");
+  const claudeDreamCommand = resolve(claudeCommands, "dream.md");
 
   rmSync(codexSkill, { recursive: true, force: true });
+  rmSync(codexDreamSkill, { recursive: true, force: true });
   mkdirSync(resolve(codexSkill, ".."), { recursive: true });
   cpSync(resolve(root, "skills/loupe"), codexSkill, { recursive: true });
+  cpSync(resolve(root, "skills/dream"), codexDreamSkill, { recursive: true });
   chmodSync(resolve(codexSkill, "scripts/loupe_context.py"), 0o755);
 
   mkdirSync(claudeCommands, { recursive: true });
   cpSync(resolve(root, "commands/claude/loupe.md"), claudeCommand);
+  cpSync(resolve(root, "commands/claude/dream.md"), claudeDreamCommand);
   console.log(`Installed Codex skill: ${codexSkill}`);
+  console.log(`Installed Codex skill: ${codexDreamSkill}`);
   console.log(`Installed Claude command: ${claudeCommand}`);
+  console.log(`Installed Claude command: ${claudeDreamCommand}`);
 }
 
 function distributionRoot(): string {
@@ -169,7 +222,9 @@ function distributionRoot(): string {
   for (const candidate of candidates) {
     if (
       existsSync(resolve(candidate, "skills/loupe/SKILL.md")) &&
-      existsSync(resolve(candidate, "commands/claude/loupe.md"))
+      existsSync(resolve(candidate, "skills/dream/SKILL.md")) &&
+      existsSync(resolve(candidate, "commands/claude/loupe.md")) &&
+      existsSync(resolve(candidate, "commands/claude/dream.md"))
     ) {
       return candidate;
     }
@@ -204,6 +259,31 @@ function renderContext(repo: string, target: string, annotations: StoredAnnotati
   ];
   annotations.forEach((a, i) => lines.push(renderAnnotation(repo, a, i + 1), ""));
   return lines.join("\n");
+}
+
+function renderDream(repo: string, item: NonNullable<ReturnType<typeof readDream>>): string {
+  const dir = resolve(repo, item.dir);
+  const lines = [
+    `# Dream: ${item.title}`,
+    "",
+    `Repo: \`${repo}\``,
+    `Dream dir: \`${dir}\``,
+    `Status: \`${item.status ?? "planned"}\``,
+    item.branch ? `Branch: \`${item.branch}\`` : "",
+    item.summary ? `Summary: ${item.summary}` : "",
+    item.goal ? `Goal: ${item.goal}` : "",
+    "",
+    "## Files",
+    item.files.plan ? `- Plan: \`${resolve(dir, item.files.plan)}\`` : "",
+    item.files.canvas ? `- Canvas: \`${resolve(dir, item.files.canvas)}\`` : "",
+    item.files.prototype ? `- Prototype: \`${resolve(dir, item.files.prototype)}\`` : "",
+    item.files.prototypeHtml ? `- Prototype HTML: \`${resolve(dir, item.files.prototypeHtml)}\`` : "",
+    item.files.report ? `- Report: \`${resolve(dir, item.files.report)}\`` : "",
+    ...item.files.images.map((image) => `- Image: \`${resolve(dir, image)}\``),
+    "",
+    item.content.plan ? "## Plan\n\n" + item.content.plan : "",
+  ];
+  return lines.filter(Boolean).join("\n");
 }
 
 function renderAnnotation(repo: string, a: StoredAnnotation, index: number): string {
@@ -343,6 +423,9 @@ Usage:
   loupe init [--repo <path>] [--name <name>] [--origin <host[:port]>] [--port <port>]
   loupe bridge [--repo <path>] [--port 7337] [--host 127.0.0.1]
   loupe list [--repo <path>] [--json]
+  loupe dreams [--repo <path>] [--json]
+  loupe dream <dream_id> [--repo <path>] [--json]
+  loupe dreamer [--repo <path>] [--port 7337] [--host 127.0.0.1]
   loupe show <group|annotation_id> [--repo <path>] [--json]
   loupe status <annotation_id> --status open|needs_review|resolved [--author agent:codex] [--repo <path>]
   loupe title <annotation_id> "<short descriptive title>" [--repo <path>]
@@ -354,6 +437,10 @@ Initialize a project once from its repo root:
 
 Run one bridge for registered projects:
   loupe bridge
+
+Open Dreamer while the bridge is running:
+  loupe dreamer
+  open "$(loupe dreamer)"
 
 If several projects reuse the same origin, choose the active project in the
 extension popup before annotating.
