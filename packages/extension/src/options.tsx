@@ -94,6 +94,7 @@ function App() {
   const committedBridgeRoutes = useRef("");
   const committedAuthor = useRef("");
   const committedOrigins = useRef("");
+  const settingsLoaded = useRef(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const flash = (text: string): void => {
@@ -202,6 +203,7 @@ function App() {
       await renderDaemonStatus();
       await renderProviders();
       await renderShortcuts();
+      settingsLoaded.current = true;
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -220,8 +222,18 @@ function App() {
     committedBridgeRoutes.current = bridgeRoutesText;
     await saveSettings({ bridgeRoutes: parseBridgeRoutes(bridgeRoutesText) });
     await renderDaemonStatus();
+    await renderProviders();
     flash("saved");
   };
+
+  useEffect(() => {
+    if (!settingsLoaded.current || bridgeRoutesText === committedBridgeRoutes.current) return;
+    const timer = setTimeout(() => {
+      void commitBridgeRoutes();
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridgeRoutesText]);
 
   const commitAuthor = async (): Promise<void> => {
     if (author === committedAuthor.current) return;
