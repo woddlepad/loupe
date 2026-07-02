@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { AnnotationTarget } from "@loupe/core/model";
 
@@ -7,7 +9,7 @@ export interface SourceResolution {
   /** Other plausible files, ranked. */
   candidates: string[];
   /** How `primary` was found. */
-  method: "ripgrep" | "filename" | "none";
+  method: "source-hint" | "ripgrep" | "filename" | "none";
 }
 
 /** Extensions we treat as component source files, in ripgrep brace-glob form. */
@@ -37,6 +39,11 @@ export class Resolver {
   constructor(private repoRoot: string) {}
 
   resolve(target: AnnotationTarget): SourceResolution {
+    const hinted = this.sourceHints(target);
+    if (hinted.length > 0) {
+      return { primary: hinted[0], candidates: hinted.slice(0, 6), method: "source-hint" };
+    }
+
     const names = target.componentChain.map((c) => c.name).filter(isComponentName);
     const defHits = this.ripgrepDefinitions(names);
     const fileHits = this.filenameMatches(names);
@@ -49,6 +56,20 @@ export class Resolver {
 
     const method = candidates[0] && defHits.includes(candidates[0]) ? "ripgrep" : "filename";
     return { primary: candidates[0], candidates: candidates.slice(0, 6), method };
+  }
+
+  private sourceHints(target: AnnotationTarget): string[] {
+    const seen = new Set<string>();
+    for (const ref of target.componentChain) {
+      const sourcePath = ref.sourcePath?.trim().replace(/^\.\//, "");
+      if (!sourcePath || seen.has(sourcePath) || !isSafeSourcePath(sourcePath)) continue;
+
+      const abs = resolvePath(this.repoRoot, sourcePath);
+      if (!abs.startsWith(resolvePath(this.repoRoot) + "/") || !existsSync(abs)) continue;
+      seen.add(sourcePath);
+      if (seen.size >= 6) break;
+    }
+    return [...seen];
   }
 
   /** Find files that likely *define* one of the given component names. */
@@ -93,4 +114,8 @@ export class Resolver {
       }
     }
   }
+}
+
+function isSafeSourcePath(value: string): boolean {
+  return value.length > 0 && !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes("..");
 }
