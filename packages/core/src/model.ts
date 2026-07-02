@@ -18,6 +18,8 @@ export interface ComponentRef {
   name: string;
   /** Runtime that exposed this component hint, when known. */
   framework?: "react" | "vue" | string;
+  /** Repo-relative source file hint injected by a build tool such as @loupe/vite. */
+  sourcePath?: string;
   /** Whether this is a host (DOM) element rather than a component. */
   host?: boolean;
 }

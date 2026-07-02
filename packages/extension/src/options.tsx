@@ -16,6 +16,7 @@ import { bridgeUrlForUrl, loadSettings, saveSettings } from "./settings.js";
 
 const COMMAND_LABELS: Record<string, string> = {
   "toggle-loupe": "Annotate",
+  "toggle-frozen-loupe": "Freeze annotate",
   "toggle-view": "View annotations",
 };
 
