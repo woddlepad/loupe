@@ -229,6 +229,8 @@ export interface ActionDescriptor {
   id: string;
   /** Button label, e.g. "Save to repo", "Claude", "Create Linear issue". */
   label: string;
+  /** Broad action category, used by Dreamer to show only executable agent providers. */
+  kind?: "builtin" | "agent" | "integration" | "custom";
   /** Optional one-line hint shown on hover. */
   hint?: string;
 }

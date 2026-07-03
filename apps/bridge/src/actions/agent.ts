@@ -23,6 +23,7 @@ export function agentActions(config: BridgeConfig): Action[] {
     .map(([name, cmd]) => ({
       id: name,
       label: capitalize(name),
+      kind: "agent",
       hint: agentHint(name, cmd),
       run: (ctx: ActionContext) =>
         cmd.mode === "session"

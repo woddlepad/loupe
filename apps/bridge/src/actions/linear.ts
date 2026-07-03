@@ -20,6 +20,7 @@ export function linearAction(cfg: LinearConfig): Action {
   return {
     id: "linear",
     label: "create Linear issue",
+    kind: "integration",
     hint: "open a Linear issue from this annotation",
     run: (ctx) => createIssue(cfg, ctx),
   };
