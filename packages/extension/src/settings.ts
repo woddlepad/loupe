@@ -62,6 +62,25 @@ export async function saveSettings(patch: Partial<LoupeSettings>): Promise<void>
   await chrome.storage.sync.set(patch);
 }
 
+export function parseBridgeRouteOrigins(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+export function bridgeRouteFromInput(originsText: string, bridgeUrl: string): BridgeRoute | undefined {
+  const origins = parseBridgeRouteOrigins(originsText);
+  if (origins.length === 0 || !bridgeUrl.trim()) return undefined;
+  return { origins, bridgeUrl: cleanBridgeUrl(bridgeUrl) };
+}
+
+export function normalizeBridgeRoutes(routes: BridgeRoute[]): BridgeRoute[] {
+  return routes
+    .map((route) => bridgeRouteFromInput(route.origins.join(","), route.bridgeUrl))
+    .filter((route): route is BridgeRoute => Boolean(route));
+}
+
 export function bridgeUrlForUrl(settings: LoupeSettings, pageUrl: string | undefined): string {
   if (pageUrl) {
     const route = settings.bridgeRoutes.find((r) => isProjectUrl(pageUrl, r.origins));

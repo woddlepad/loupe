@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Plus, Trash2 } from "lucide-react";
 import {
   Button,
   Checkbox,
@@ -12,7 +13,14 @@ import {
   Textarea,
 } from "@loupe/ui";
 import type { BridgeRoute, CodexLaunchMode } from "./settings.js";
-import { bridgeUrlForUrl, loadSettings, saveSettings } from "./settings.js";
+import {
+  bridgeRouteFromInput,
+  bridgeUrlForUrl,
+  loadSettings,
+  normalizeBridgeRoutes,
+  parseBridgeRouteOrigins,
+  saveSettings,
+} from "./settings.js";
 
 const COMMAND_LABELS: Record<string, string> = {
   "toggle-loupe": "Annotate",
@@ -40,23 +48,39 @@ interface DaemonState {
   connected: boolean;
 }
 
-function parseBridgeRoutes(value: string): BridgeRoute[] {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"))
-    .map((line) => {
-      const [originsRaw, bridgeRaw] = line.split(/\s+/, 2);
-      return {
-        origins: (originsRaw ?? "").split(",").map((origin) => origin.trim()).filter(Boolean),
-        bridgeUrl: (bridgeRaw ?? "").trim().replace(/\/$/, ""),
-      };
-    })
-    .filter((route) => route.origins.length > 0 && route.bridgeUrl);
+interface BridgeRouteDraft {
+  id: string;
+  originsText: string;
+  bridgeUrl: string;
 }
 
-function formatBridgeRoutes(routes: BridgeRoute[]): string {
-  return routes.map((route) => `${route.origins.join(",")} ${route.bridgeUrl}`).join("\n");
+let nextRouteId = 0;
+
+function createRouteDraft(route?: BridgeRoute): BridgeRouteDraft {
+  nextRouteId += 1;
+  return {
+    id: `bridge-route-${nextRouteId}`,
+    originsText: route?.origins.join(", ") ?? "",
+    bridgeUrl: route?.bridgeUrl ?? "",
+  };
+}
+
+function bridgeRoutesFromDrafts(drafts: BridgeRouteDraft[]): BridgeRoute[] {
+  return drafts
+    .map((draft) => bridgeRouteFromInput(draft.originsText, draft.bridgeUrl))
+    .filter((route): route is BridgeRoute => Boolean(route));
+}
+
+function bridgeRoutesKey(routes: BridgeRoute[]): string {
+  return JSON.stringify(normalizeBridgeRoutes(routes));
+}
+
+function hasIncompleteBridgeRouteDraft(drafts: BridgeRouteDraft[]): boolean {
+  return drafts.some((draft) => {
+    const hasOrigins = parseBridgeRouteOrigins(draft.originsText).length > 0;
+    const hasBridgeUrl = Boolean(draft.bridgeUrl.trim());
+    return hasOrigins !== hasBridgeUrl;
+  });
 }
 
 function parseCodexLaunchMode(value: string): CodexLaunchMode {
@@ -74,7 +98,7 @@ async function currentTabUrl(): Promise<string | undefined> {
 
 function App() {
   const [bridgeUrl, setBridgeUrl] = useState("");
-  const [bridgeRoutesText, setBridgeRoutesText] = useState("");
+  const [bridgeRoutes, setBridgeRoutes] = useState<BridgeRouteDraft[]>([]);
   const [author, setAuthor] = useState("");
   const [codexMode, setCodexMode] = useState<CodexLaunchMode>("background");
   const [projectOriginsText, setProjectOriginsText] = useState("");
@@ -87,7 +111,7 @@ function App() {
   // Mirror the committed field values so the async render helpers below always
   // read the latest bridge URL / routes without stale closures.
   const bridgeUrlRef = useRef("");
-  const bridgeRoutesRef = useRef("");
+  const bridgeRoutesRef = useRef<BridgeRouteDraft[]>([]);
   // Last-committed values, so a blur without an edit does not re-save/flash
   // (the native <input> "change" event only fired when the value changed).
   const committedBridgeUrl = useRef("");
@@ -103,11 +127,17 @@ function App() {
     flashTimer.current = setTimeout(() => setSaved(""), 1600);
   };
 
+  const setBridgeRouteDrafts = (updater: BridgeRouteDraft[] | ((routes: BridgeRouteDraft[]) => BridgeRouteDraft[])): void => {
+    const next = typeof updater === "function" ? updater(bridgeRoutesRef.current) : updater;
+    bridgeRoutesRef.current = next;
+    setBridgeRoutes(next);
+  };
+
   const renderDaemonStatus = async (): Promise<void> => {
     const current = await currentTabUrl();
     const settings = await loadSettings();
     settings.bridgeUrl = bridgeUrlRef.current.trim() || settings.bridgeUrl;
-    settings.bridgeRoutes = parseBridgeRoutes(bridgeRoutesRef.current);
+    settings.bridgeRoutes = bridgeRoutesFromDrafts(bridgeRoutesRef.current);
     const url = bridgeUrlForUrl(settings, current);
     try {
       const healthUrl = new URL("/health", url.endsWith("/") ? url : `${url}/`);
@@ -143,7 +173,7 @@ function App() {
     const current = await currentTabUrl();
     const settings = await loadSettings();
     settings.bridgeUrl = bridgeUrlRef.current.trim() || settings.bridgeUrl;
-    settings.bridgeRoutes = parseBridgeRoutes(bridgeRoutesRef.current);
+    settings.bridgeRoutes = bridgeRoutesFromDrafts(bridgeRoutesRef.current);
     const base = bridgeUrlForUrl(settings, current);
     let actions: { id: string; label: string }[] = [];
     try {
@@ -187,17 +217,17 @@ function App() {
   useEffect(() => {
     void (async () => {
       const s = await loadSettings();
-      const routesText = formatBridgeRoutes(s.bridgeRoutes);
+      const routeDrafts = normalizeBridgeRoutes(s.bridgeRoutes).map((route) => createRouteDraft(route));
       const originsText = s.projectOrigins.join("\n");
       setBridgeUrl(s.bridgeUrl);
-      setBridgeRoutesText(routesText);
+      setBridgeRoutes(routeDrafts);
       setAuthor(s.author);
       setCodexMode(s.codexLaunchMode);
       setProjectOriginsText(originsText);
       bridgeUrlRef.current = s.bridgeUrl;
-      bridgeRoutesRef.current = routesText;
+      bridgeRoutesRef.current = routeDrafts;
       committedBridgeUrl.current = s.bridgeUrl;
-      committedBridgeRoutes.current = routesText;
+      committedBridgeRoutes.current = bridgeRoutesKey(bridgeRoutesFromDrafts(routeDrafts));
       committedAuthor.current = s.author;
       committedOrigins.current = originsText;
       await renderDaemonStatus();
@@ -218,22 +248,40 @@ function App() {
   };
 
   const commitBridgeRoutes = async (): Promise<void> => {
-    if (bridgeRoutesText === committedBridgeRoutes.current) return;
-    committedBridgeRoutes.current = bridgeRoutesText;
-    await saveSettings({ bridgeRoutes: parseBridgeRoutes(bridgeRoutesText) });
+    if (hasIncompleteBridgeRouteDraft(bridgeRoutesRef.current)) return;
+    const routes = bridgeRoutesFromDrafts(bridgeRoutesRef.current);
+    const key = bridgeRoutesKey(routes);
+    if (key === committedBridgeRoutes.current) return;
+    committedBridgeRoutes.current = key;
+    await saveSettings({ bridgeRoutes: routes });
     await renderDaemonStatus();
     await renderProviders();
     flash("saved");
   };
 
   useEffect(() => {
-    if (!settingsLoaded.current || bridgeRoutesText === committedBridgeRoutes.current) return;
+    if (!settingsLoaded.current) return;
+    if (hasIncompleteBridgeRouteDraft(bridgeRoutesRef.current)) return;
+    const routes = bridgeRoutesFromDrafts(bridgeRoutesRef.current);
+    if (bridgeRoutesKey(routes) === committedBridgeRoutes.current) return;
     const timer = setTimeout(() => {
       void commitBridgeRoutes();
     }, 500);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridgeRoutesText]);
+  }, [bridgeRoutes]);
+
+  const addBridgeRoute = (): void => {
+    setBridgeRouteDrafts((routes) => [...routes, createRouteDraft()]);
+  };
+
+  const updateBridgeRoute = (id: string, patch: Partial<Omit<BridgeRouteDraft, "id">>): void => {
+    setBridgeRouteDrafts((routes) => routes.map((route) => (route.id === id ? { ...route, ...patch } : route)));
+  };
+
+  const removeBridgeRoute = (id: string): void => {
+    setBridgeRouteDrafts((routes) => routes.filter((route) => route.id !== id));
+  };
 
   const commitAuthor = async (): Promise<void> => {
     if (author === committedAuthor.current) return;
@@ -323,23 +371,62 @@ function App() {
         </code>
       </p>
 
-      <label htmlFor="bridgeRoutes" className="block text-[12px] text-loupe-muted mb-1.5 mt-4">
-        Bridge routes
-      </label>
-      <Textarea
-        id="bridgeRoutes"
-        rows={3}
-        placeholder={"mac-studio*.ts.net http://mac-studio.tailnet.ts.net:7337\n*.mac-studio.local http://mac-studio.local:7337"}
-        className="w-full text-[12px] font-mono resize-y"
-        value={bridgeRoutesText}
-        onChange={(e) => {
-          setBridgeRoutesText(e.target.value);
-          bridgeRoutesRef.current = e.target.value;
-        }}
-        onBlur={() => void commitBridgeRoutes()}
-      />
+      <div className="mt-4 mb-1.5 flex items-center gap-2">
+        <label className="block text-[12px] text-loupe-muted">Bridge routes</label>
+        <Button type="button" size="xs" variant="outline" className="ml-auto text-[11px]" onClick={addBridgeRoute}>
+          <Plus className="h-3.5 w-3.5" />
+          Add route
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {bridgeRoutes.length === 0 ? (
+          <div className="rounded-lg bg-loupe-panel/60 border border-loupe-line p-3 text-[12px] text-loupe-muted">
+            No route overrides. Pages use the default bridge URL above.
+          </div>
+        ) : (
+          bridgeRoutes.map((route, index) => (
+            <div key={route.id} className="rounded-lg bg-loupe-panel/60 border border-loupe-line p-2.5">
+              <div className="mb-2 flex items-center gap-2">
+                <div className="text-[11px] font-medium text-loupe-muted">Route {index + 1}</div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  className="ml-auto text-loupe-muted hover:text-loupe-fg"
+                  aria-label={`Remove bridge route ${index + 1}`}
+                  title="Remove route"
+                  onClick={() => removeBridgeRoute(route.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div className="grid gap-2">
+                <Input
+                  type="text"
+                  placeholder="localhost:5173, *.tailnet.ts.net"
+                  className="w-full text-[12px] font-mono"
+                  aria-label={`Route ${index + 1} page origins`}
+                  value={route.originsText}
+                  onChange={(e) => updateBridgeRoute(route.id, { originsText: e.target.value })}
+                  onBlur={() => void commitBridgeRoutes()}
+                />
+                <Input
+                  type="text"
+                  placeholder="http://remote-host:7337"
+                  className="w-full text-[12px] font-mono"
+                  aria-label={`Route ${index + 1} bridge URL`}
+                  value={route.bridgeUrl}
+                  onChange={(e) => updateBridgeRoute(route.id, { bridgeUrl: e.target.value })}
+                  onBlur={() => void commitBridgeRoutes()}
+                />
+              </div>
+            </div>
+          ))
+        )}
+      </div>
       <p className="text-loupe-faint text-[11px] mt-1.5">
-        first match wins. pages that do not match a route use the default bridge URL above.
+        first match wins. local pages can use the default bridge; remote or staging pages can route
+        to another daemon.
       </p>
 
       <div

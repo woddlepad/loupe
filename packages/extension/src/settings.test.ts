@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bridgeUrlForUrl, enabledActions, type LoupeSettings } from "./settings.js";
+import {
+  bridgeRouteFromInput,
+  bridgeUrlForUrl,
+  enabledActions,
+  normalizeBridgeRoutes,
+  parseBridgeRouteOrigins,
+  type LoupeSettings,
+} from "./settings.js";
 
 function settings(overrides: Partial<LoupeSettings> = {}): LoupeSettings {
   return {
@@ -34,6 +41,52 @@ test("routes mac-studio local subdomains to the remote bridge", () => {
   assert.equal(
     bridgeUrlForUrl(settings(), "http://preview.mac-studio.local:3000/app"),
     "http://mac-studio.tailnet.ts.net:7337",
+  );
+});
+
+test("uses the first matching bridge route", () => {
+  assert.equal(
+    bridgeUrlForUrl(
+      settings({
+        bridgeRoutes: [
+          { origins: ["*.example.test"], bridgeUrl: "http://first.example.test:7337" },
+          { origins: ["preview.example.test"], bridgeUrl: "http://second.example.test:7337" },
+        ],
+      }),
+      "https://preview.example.test/app",
+    ),
+    "http://first.example.test:7337",
+  );
+});
+
+test("parses comma and newline separated bridge route origins", () => {
+  assert.deepEqual(parseBridgeRouteOrigins("localhost:5173, *.tailnet.ts.net\nstaging.acme.com"), [
+    "localhost:5173",
+    "*.tailnet.ts.net",
+    "staging.acme.com",
+  ]);
+});
+
+test("creates a complete bridge route from input", () => {
+  assert.deepEqual(bridgeRouteFromInput("localhost:5173, *.tailnet.ts.net", " http://remote:7337/ "), {
+    origins: ["localhost:5173", "*.tailnet.ts.net"],
+    bridgeUrl: "http://remote:7337",
+  });
+});
+
+test("ignores incomplete bridge route input", () => {
+  assert.equal(bridgeRouteFromInput("localhost:5173", ""), undefined);
+  assert.equal(bridgeRouteFromInput("", "http://remote:7337"), undefined);
+});
+
+test("normalizes bridge routes before saving", () => {
+  assert.deepEqual(
+    normalizeBridgeRoutes([
+      { origins: ["localhost:5173", " *.tailnet.ts.net "], bridgeUrl: " http://remote:7337/ " },
+      { origins: [], bridgeUrl: "http://empty-origins:7337" },
+      { origins: ["staging.acme.com"], bridgeUrl: "" },
+    ]),
+    [{ origins: ["localhost:5173", "*.tailnet.ts.net"], bridgeUrl: "http://remote:7337" }],
   );
 });
 
