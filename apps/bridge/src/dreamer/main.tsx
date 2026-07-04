@@ -133,6 +133,7 @@ const PLAN_SORT_OPTIONS: { label: string; value: PlanSort }[] = [
 ];
 
 const KNOWN_AGENT_IDS = new Set(["claude", "codex", "copilot", "pi"]);
+const MODEL_SELECTIONS_STORAGE_KEY = "loupe:agent-model-selections";
 
 const EMPTY_MARKDOWN = `## Background
 
@@ -176,7 +177,7 @@ function App() {
   const [activeTab, setActiveTab] = React.useState<VisualTab>("plan");
   const [launchState, setLaunchState] = React.useState<LaunchState>({ kind: "idle" });
   const [launchingAction, setLaunchingAction] = React.useState<string | null>(null);
-  const [selectedModels, setSelectedModels] = React.useState<Record<string, string>>({});
+  const [selectedModels, setSelectedModels] = React.useState<Record<string, string>>(() => readStoredModelSelections());
   const [autosaveState, setAutosaveState] = React.useState<AutosaveState>({ kind: "clean" });
   const [loading, setLoading] = React.useState(true);
 
@@ -409,6 +410,14 @@ function App() {
     setLaunchState({ kind: "ok", message: "Copied launch prompt" });
   }
 
+  function chooseModel(actionId: string, model: string) {
+    setSelectedModels((current) => {
+      const next = defaultModels(actions, { ...current, [actionId]: model });
+      writeStoredModelSelections(next);
+      return next;
+    });
+  }
+
   function apiUrl(path: string): string {
     const url = new URL(path, window.location.origin);
     if (repoRootParam) url.searchParams.set("repoRoot", repoRootParam);
@@ -562,7 +571,7 @@ function App() {
                                 key={agent.id}
                                 launching={launchingAction === agent.id}
                                 onLaunch={(model) => void launch(agent, model)}
-                                onModelChange={(model) => setSelectedModels((current) => ({ ...current, [agent.id]: model }))}
+                                onModelChange={(model) => chooseModel(agent.id, model)}
                                 selectedModel={selectedModels[agent.id] ?? agent.defaultModel ?? agent.models?.[0]?.id}
                               />
                             ))}
@@ -1295,9 +1304,38 @@ function tabLabel(tab: VisualTab): string {
 function defaultModels(actions: ActionDescriptor[], current: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     actions
-      .map((action) => [action.id, current[action.id] ?? action.defaultModel ?? action.models?.[0]?.id])
+      .map((action) => [action.id, validModelId(action, current[action.id]) ?? action.defaultModel ?? action.models?.[0]?.id])
       .filter((entry): entry is [string, string] => Boolean(entry[1])),
   );
+}
+
+function validModelId(action: ActionDescriptor, model: string | undefined): string | undefined {
+  if (!model || !action.models?.length) return undefined;
+  return action.models.some((option) => option.id === model) ? model : undefined;
+}
+
+function readStoredModelSelections(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(MODEL_SELECTIONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredModelSelections(models: Record<string, string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MODEL_SELECTIONS_STORAGE_KEY, JSON.stringify(models));
+  } catch {
+    // Storage can be unavailable in restrictive browser modes; the in-memory selection still works.
+  }
 }
 
 function dreamLaunchPromptText(dream: DreamSummary, detail: DreamDetail | undefined): string {

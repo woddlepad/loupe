@@ -23,6 +23,7 @@ import {
 import {
   Button,
   ButtonGroup,
+  ButtonGroupSeparator,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -49,6 +50,7 @@ const COPILOT_LOGO_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" preserveAspectRatio="xMidYMid" viewBox="0 0 256 208"><path fill="currentColor" d="M205.3 31.4c14 14.8 20 35.2 22.5 63.6 6.6 0 12.8 1.5 17 7.2l7.8 10.6c2.2 3 3.4 6.6 3.4 10.4v28.7a12 12 0 0 1-4.8 9.5C215.9 187.2 172.3 208 128 208c-49 0-98.2-28.3-123.2-46.6a12 12 0 0 1-4.8-9.5v-28.7c0-3.8 1.2-7.4 3.4-10.5l7.8-10.5c4.2-5.7 10.4-7.2 17-7.2 2.5-28.4 8.4-48.8 22.5-63.6C77.3 3.2 112.6 0 127.6 0h.4c14.7 0 50.4 2.9 77.3 31.4ZM128 78.7c-3 0-6.5.2-10.3.6a27.1 27.1 0 0 1-6 12.1 45 45 0 0 1-32 13c-6.8 0-13.9-1.5-19.7-5.2-5.5 1.9-10.8 4.5-11.2 11-.5 12.2-.6 24.5-.6 36.8 0 6.1 0 12.3-.2 18.5 0 3.6 2.2 6.9 5.5 8.4C79.9 185.9 105 192 128 192s48-6 74.5-18.1a9.4 9.4 0 0 0 5.5-8.4c.3-18.4 0-37-.8-55.3-.4-6.6-5.7-9.1-11.2-11-5.8 3.7-13 5.1-19.7 5.1a45 45 0 0 1-32-12.9 27.1 27.1 0 0 1-6-12.1c-3.4-.4-6.9-.5-10.3-.6Zm-27 44c5.8 0 10.5 4.6 10.5 10.4v19.2a10.4 10.4 0 0 1-20.8 0V133c0-5.8 4.6-10.4 10.4-10.4Zm53.4 0c5.8 0 10.4 4.6 10.4 10.4v19.2a10.4 10.4 0 0 1-20.8 0V133c0-5.8 4.7-10.4 10.4-10.4Zm-73-94.4c-11.2 1.1-20.6 4.8-25.4 10-10.4 11.3-8.2 40.1-2.2 46.2A31.2 31.2 0 0 0 75 91.7c6.8 0 19.6-1.5 30.1-12.2 4.7-4.5 7.5-15.7 7.2-27-.3-9.1-2.9-16.7-6.7-19.9-4.2-3.6-13.6-5.2-24.2-4.3Zm69 4.3c-3.8 3.2-6.4 10.8-6.7 19.9-.3 11.3 2.5 22.5 7.2 27a41.7 41.7 0 0 0 30 12.2c8.9 0 17-2.9 21.3-7.2 6-6.1 8.2-34.9-2.2-46.3-4.8-5-14.2-8.8-25.4-9.9-10.6-1-20 .7-24.2 4.3ZM128 56c-2.6 0-5.6.2-9 .5.4 1.7.5 3.7.7 5.7 0 1.5 0 3-.2 4.5 3.2-.3 6-.3 8.5-.3 2.6 0 5.3 0 8.5.3-.2-1.6-.2-3-.2-4.5.2-2 .3-4 .7-5.7-3.4-.3-6.4-.5-9-.5Z"/></svg>';
 
 const CLAUDE_COLOR = "#d97757";
+const MODEL_SELECTIONS_STORAGE_KEY = "loupe:agent-model-selections";
 
 export interface EditPanelReference {
   dataUrl: string;
@@ -149,7 +151,19 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
 
   const submitting = submittingActionId != null;
   const hasDefault = actions.some((a) => a.id === defaultActionId);
-  const [selectedModels, setSelectedModels] = useState<Record<string, string>>(() => defaultModels(actions));
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>(() => defaultModels(actions, readStoredModelSelections()));
+
+  useEffect(() => {
+    setSelectedModels((current) => defaultModels(actions, current));
+  }, [actions]);
+
+  const chooseModel = (actionId: string, model: string): void => {
+    setSelectedModels((current) => {
+      const next = defaultModels(actions, { ...current, [actionId]: model });
+      writeStoredModelSelections(next);
+      return next;
+    });
+  };
 
   const onPanelKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
     if (
@@ -266,7 +280,7 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
                 isDefault={isDefault}
                 submittingActionId={submittingActionId}
                 disabled={submitting && submittingActionId !== a.id}
-                onModelChange={(model) => setSelectedModels((current) => ({ ...current, [a.id]: model }))}
+                onModelChange={(model) => chooseModel(a.id, model)}
                 onSubmit={(model) => void onSubmit(a.id, model)}
               />
             ) : (
@@ -313,11 +327,11 @@ function AgentModelButton({
   const selected = action.models?.find((model) => model.id === selectedModel) ?? action.models?.[0];
   const buttonVariant = isDefault ? "default" : "secondary";
   return (
-    <ButtonGroup className="flex w-full items-stretch">
+    <ButtonGroup className="w-full min-w-0">
       <Button
         type="button"
         variant={buttonVariant}
-        className="min-w-0 flex-1"
+        className="min-w-0 flex-[1_1_45%] justify-start"
         loading={submittingActionId === action.id}
         disabled={disabled}
         title={selected ? `${actionLabel(action)} with ${selected.label}` : action.hint}
@@ -325,18 +339,19 @@ function AgentModelButton({
       >
         <ActionIcon action={action} />
         <span className="min-w-0 truncate">{actionLabel(action)}</span>
-        {selected ? <span className="min-w-0 truncate text-[11px] opacity-75">{selected.label}</span> : null}
       </Button>
+      <ButtonGroupSeparator />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             type="button"
             variant={buttonVariant}
-            className="w-9 px-0"
+            className="min-w-0 flex-[1.1_1_0] justify-between px-2"
             disabled={disabled}
             title={`Choose ${actionLabel(action)} model`}
             aria-label={`Choose ${actionLabel(action)} model`}
           >
+            <span className="min-w-0 truncate text-[11px]">{selected?.label ?? "Model"}</span>
             <ChevronDown width={15} height={15} aria-hidden />
           </Button>
         </DropdownMenuTrigger>
@@ -361,12 +376,41 @@ function AgentModelButton({
   );
 }
 
-function defaultModels(actions: ActionDescriptor[]): Record<string, string> {
+function defaultModels(actions: ActionDescriptor[], preferred: Record<string, string> = {}): Record<string, string> {
   return Object.fromEntries(
     actions
-      .map((action) => [action.id, action.defaultModel ?? action.models?.[0]?.id])
+      .map((action) => [action.id, validModelId(action, preferred[action.id]) ?? action.defaultModel ?? action.models?.[0]?.id])
       .filter((entry): entry is [string, string] => Boolean(entry[1])),
   );
+}
+
+function validModelId(action: ActionDescriptor, model: string | undefined): string | undefined {
+  if (!model || !action.models?.length) return undefined;
+  return action.models.some((option) => option.id === model) ? model : undefined;
+}
+
+function readStoredModelSelections(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(MODEL_SELECTIONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredModelSelections(models: Record<string, string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MODEL_SELECTIONS_STORAGE_KEY, JSON.stringify(models));
+  } catch {
+    // Storage can be unavailable in restrictive embeds; model choice still works for this panel instance.
+  }
 }
 
 function Crumbs({ target }: { target: AnnotationTarget }): ReactElement {
