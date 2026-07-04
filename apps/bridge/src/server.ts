@@ -146,7 +146,7 @@ async function handleRequest(
   const dreamRun = path.match(/^\/dreams\/([^/]+)\/run$/);
   if (method === "POST" && dreamRun) {
     return withBody(req, res, (b) =>
-      handleDreamRun(config, decodeURIComponent(dreamRun[1]!), JSON.parse(b) as { action?: string }),
+      handleDreamRun(config, decodeURIComponent(dreamRun[1]!), JSON.parse(b) as { action?: string; model?: string }),
     );
   }
   const dreamReset = path.match(/^\/dreams\/([^/]+)\/reset$/);
@@ -563,7 +563,7 @@ function handleWriteDream(config: BridgeConfig, body: DreamWriteInput) {
 async function handleDreamRun(
   config: BridgeConfig,
   id: string,
-  body: { action?: string },
+  body: { action?: string; model?: string },
 ): Promise<{ ok: boolean; action: string; detail?: string; dream?: unknown; url?: string }> {
   const action = body.action?.trim();
   if (!action) throw new Error("missing action");
@@ -576,7 +576,7 @@ async function handleDreamRun(
   }
 
   const logPath = resolve(config.repoRoot, dream.dir, `agent-${action}.log`);
-  const outcome = await runDreamAgent(action, cmd, config, dream, logPath);
+  const outcome = await runDreamAgent(action, cmd, config, dream, logPath, body.model);
   console.log(`[loupe] dream "${id}" → ${action}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
   if (!outcome.ok) return { ok: false, action, detail: outcome.detail, url: outcome.url };
 

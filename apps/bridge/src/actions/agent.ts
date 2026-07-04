@@ -113,7 +113,9 @@ export function runDreamAgent(
   config: BridgeConfig,
   dream: DreamDetail,
   logPath: string,
+  model?: string,
 ): ActionOutcome | Promise<ActionOutcome> {
+  const chosenModel = selectedModel(cmd, model);
   const launchPrompt = buildDreamLaunchPrompt(dream);
   if (cmd.mode === "session") {
     return {
@@ -121,39 +123,29 @@ export function runDreamAgent(
       detail: `saved dream ${dream.id} — pick it up in your open ${name} session`,
     };
   }
-  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, launchPrompt);
-  if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, launchPrompt);
-  return spawnAgent(name, cmd, config.repoRoot, launchPrompt, launchPrompt, undefined, [], logPath);
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, launchPrompt, chosenModel);
+  if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, launchPrompt, chosenModel);
+  return spawnAgent(name, cmd, config.repoRoot, launchPrompt, launchPrompt, undefined, [], logPath, chosenModel);
 }
 
 export function buildDreamLaunchPrompt(dream: DreamDetail): string {
-  const goal = dream.goal?.trim() || `Implement the Dreamer plan "${dream.title}"`;
-  const planPath = `${dream.dir}/plan.mdx`;
+  const planPath = `${dream.dir}/${dream.files.plan ?? "plan.mdx"}`;
+  const reportPath = `${dream.dir}/${dream.files.report ?? "report.md"}`;
   const visualPaths = [
     dream.files.canvas ? `${dream.dir}/${dream.files.canvas}` : "",
     dream.files.prototype ? `${dream.dir}/${dream.files.prototype}` : "",
     dream.files.prototypeHtml ? `${dream.dir}/${dream.files.prototypeHtml}` : "",
     ...dream.files.images.map((image) => `${dream.dir}/${image}`),
   ].filter(Boolean);
+  const contextPaths = [planPath, ...visualPaths];
 
   return [
-    `/goal ${goal}`,
+    `/goal Implement the saved Loupe Dreamer plan at ${planPath} with the ship-feature skill.`,
     "",
-    "Use the ship-feature skill to implement this saved Loupe Dreamer plan end to end. This is an implementation launch, not a request to create another dream.",
-    "",
-    `Dream id: ${dream.id}`,
-    `Title: ${dream.title}`,
-    dream.summary ? `Summary: ${dream.summary}` : "",
-    `Plan: ${planPath}`,
-    visualPaths.length ? `Visual plan artifacts: ${visualPaths.join(", ")}` : "",
+    "Read the dream file as the source of truth for the goal, repo anchors, implementation plan, verification, and reporting requirements.",
+    contextPaths.length > 1 ? `Use these dream artifacts as needed: ${contextPaths.join(", ")}` : "",
     dream.branch ? `Target branch/ref context: ${dream.branch}` : "",
-    "",
-    "Requirements:",
-    "- Follow the repository AGENTS.md and local conventions exactly.",
-    "- Treat the Dreamer plan as the source of truth, including success criteria, repo anchors, verification, and UX expectations.",
-    "- If the plan is stale or contradicted by the repo, stop and report the exact blocker instead of inventing a different feature.",
-    "- Implement with the best achievable product quality; use real browser review when UI behavior is in scope.",
-    `- When finished, write a concise implementation report to ${dream.dir}/report.md with summary, changed files, verification commands/results, screenshots or artifact paths if applicable, and remaining risks.`,
+    `Write the final implementation report to ${reportPath}.`,
   ]
     .filter(Boolean)
     .join("\n");

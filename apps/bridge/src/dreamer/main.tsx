@@ -3,8 +3,11 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  Copy,
   ExternalLink,
   GitBranch,
   ImageIcon,
@@ -22,6 +25,7 @@ import {
 } from "lucide-react";
 import {
   Button,
+  ButtonGroup,
   Checkbox,
   DropdownMenu,
   DropdownMenuContent,
@@ -74,6 +78,14 @@ interface ActionDescriptor {
   id: string;
   label: string;
   kind?: "builtin" | "agent" | "integration" | "custom";
+  hint?: string;
+  models?: ActionModelOption[];
+  defaultModel?: string;
+}
+
+interface ActionModelOption {
+  id: string;
+  label: string;
   hint?: string;
 }
 
@@ -164,6 +176,7 @@ function App() {
   const [activeTab, setActiveTab] = React.useState<VisualTab>("plan");
   const [launchState, setLaunchState] = React.useState<LaunchState>({ kind: "idle" });
   const [launchingAction, setLaunchingAction] = React.useState<string | null>(null);
+  const [selectedModels, setSelectedModels] = React.useState<Record<string, string>>({});
   const [autosaveState, setAutosaveState] = React.useState<AutosaveState>({ kind: "clean" });
   const [loading, setLoading] = React.useState(true);
 
@@ -244,9 +257,11 @@ function App() {
         fetchJson<{ actions?: ActionDescriptor[] }>("/actions").catch(() => ({ actions: [] })),
       ]);
       const nextPlans = [...(dreams.dreams ?? [])].sort(sortDreams);
+      const nextActions = providerActions(actionList.actions ?? []);
       setRepoRoot(health.repoRoot ?? repoRootParam ?? "");
       setPlans(nextPlans);
-      setActions(providerActions(actionList.actions ?? []));
+      setActions(nextActions);
+      setSelectedModels((current) => defaultModels(nextActions, current));
       setSelectedPlanId((current) => current || nextPlans[0]?.id || "");
       setSelectedReportId((current) => current || nextPlans.find((plan) => plan.files.report || plan.files.images.length)?.id || "");
     } finally {
@@ -354,7 +369,7 @@ function App() {
     setLaunchState({ kind: "ok", message: "Launch state reset" });
   }
 
-  async function launch(agent: ActionDescriptor) {
+  async function launch(agent: ActionDescriptor, model?: string) {
     if (!selectedPlan) return;
     if (selectedPlan.status === "running") {
       setLaunchState({ kind: "error", message: "This dream is already running." });
@@ -366,7 +381,7 @@ function App() {
       const response = await fetch(apiUrl(`/dreams/${encodeURIComponent(selectedPlan.id)}/run`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: agent.id }),
+        body: JSON.stringify({ action: agent.id, model }),
       });
       const result = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -386,6 +401,12 @@ function App() {
     } finally {
       setLaunchingAction(null);
     }
+  }
+
+  async function copySelectedPlanPrompt() {
+    if (!selectedPlan || !navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(dreamLaunchPromptText(selectedPlan, selectedDetail));
+    setLaunchState({ kind: "ok", message: "Copied launch prompt" });
   }
 
   function apiUrl(path: string): string {
@@ -533,21 +554,17 @@ function App() {
                         </div>
 
                         <div className="flex flex-col gap-2 sm:min-w-80">
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 gap-1.5">
                             {actions.map((agent) => (
-                              <Button
-                                className="justify-center gap-2"
+                              <AgentLaunchButton
+                                action={agent}
                                 disabled={Boolean(draft) || Boolean(launchingAction) || selectedPlan?.status === "running"}
                                 key={agent.id}
-                                loading={launchingAction === agent.id}
-                                onClick={() => void launch(agent)}
-                                title={agent.hint}
-                                type="button"
-                                variant={agent.id === "claude" ? "default" : "secondary"}
-                              >
-                                <ProviderIcon action={agent} />
-                                {agent.label}
-                              </Button>
+                                launching={launchingAction === agent.id}
+                                onLaunch={(model) => void launch(agent, model)}
+                                onModelChange={(model) => setSelectedModels((current) => ({ ...current, [agent.id]: model }))}
+                                selectedModel={selectedModels[agent.id] ?? agent.defaultModel ?? agent.models?.[0]?.id}
+                              />
                             ))}
                           </div>
                           <div className="flex items-center justify-between gap-2">
@@ -555,7 +572,9 @@ function App() {
                             <PlanActionsMenu
                               canDelete={Boolean(selectedPlan)}
                               canEdit={Boolean(selectedPlan)}
+                              canCopy={Boolean(selectedPlan)}
                               canReset={selectedPlan?.status === "running"}
+                              onCopy={copySelectedPlanPrompt}
                               onDelete={deleteSelectedPlan}
                               onEdit={beginEditPlan}
                               onReset={resetSelectedPlanLaunch}
@@ -1017,17 +1036,98 @@ function AutosaveStatus({ state }: { state: AutosaveState }) {
   return <p className="text-xs text-destructive">{state.message}</p>;
 }
 
+function AgentLaunchButton({
+  action,
+  disabled,
+  launching,
+  onLaunch,
+  onModelChange,
+  selectedModel,
+}: {
+  action: ActionDescriptor;
+  disabled?: boolean;
+  launching?: boolean;
+  onLaunch: (model?: string) => void;
+  onModelChange: (model: string) => void;
+  selectedModel?: string;
+}) {
+  const selected = action.models?.find((model) => model.id === selectedModel) ?? action.models?.[0];
+  if (!action.models?.length) {
+    return (
+      <Button
+        className="h-10 justify-start gap-2 border-border bg-secondary/70 px-3 text-secondary-foreground hover:bg-secondary"
+        disabled={disabled}
+        loading={launching}
+        onClick={() => onLaunch()}
+        title={action.hint}
+        type="button"
+        variant="outline"
+      >
+        <ProviderIcon action={action} />
+        {action.label}
+      </Button>
+    );
+  }
+
+  return (
+    <ButtonGroup className="h-10 w-full min-w-0">
+      <Button
+        className="h-10 min-w-0 basis-[42%] justify-start gap-2 px-3"
+        disabled={disabled}
+        loading={launching}
+        onClick={() => onLaunch(selected?.id)}
+        title={selected ? `${action.label} with ${selected.label}` : action.hint}
+        type="button"
+        variant="outline"
+      >
+        <ProviderIcon action={action} />
+        <span className="truncate">{action.label}</span>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            aria-label={`Choose ${action.label} model`}
+            className="h-10 min-w-0 flex-1 justify-between gap-2 px-3"
+            disabled={disabled || Boolean(launching)}
+            title={`Choose ${action.label} model`}
+            type="button"
+            variant="outline"
+          >
+            <span className="truncate text-sm">{selected?.label ?? "Model"}</span>
+            <ChevronDown className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          {action.models.map((model) => (
+            <DropdownMenuItem className="items-start" key={model.id} onSelect={() => onModelChange(model.id)}>
+              <Check className={cn("mt-0.5 size-4", model.id === selected?.id ? "opacity-100" : "opacity-0")} />
+              <span className="min-w-0">
+                <span className="block truncate">{model.label}</span>
+                {model.hint ? <span className="block truncate text-xs text-muted-foreground">{model.hint}</span> : null}
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </ButtonGroup>
+  );
+}
+
 function PlanActionsMenu({
+  canCopy,
   canDelete,
   canEdit,
   canReset,
+  onCopy,
   onDelete,
   onEdit,
   onReset,
 }: {
+  canCopy: boolean;
   canDelete: boolean;
   canEdit: boolean;
   canReset: boolean;
+  onCopy: () => void;
   onDelete: () => void;
   onEdit: () => void;
   onReset: () => void;
@@ -1048,6 +1148,10 @@ function PlanActionsMenu({
         <DropdownMenuItem disabled={!canReset} onSelect={onReset}>
           <RotateCcw className="size-4" />
           Reset launch state
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canCopy} onSelect={onCopy}>
+          <Copy className="size-4" />
+          Copy prompt
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={!canDelete} onSelect={onDelete} variant="destructive">
@@ -1186,6 +1290,38 @@ function tabLabel(tab: VisualTab): string {
   if (tab === "prototype") return "Prototype";
   if (tab === "report") return "Report";
   return "Plan";
+}
+
+function defaultModels(actions: ActionDescriptor[], current: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    actions
+      .map((action) => [action.id, current[action.id] ?? action.defaultModel ?? action.models?.[0]?.id])
+      .filter((entry): entry is [string, string] => Boolean(entry[1])),
+  );
+}
+
+function dreamLaunchPromptText(dream: DreamSummary, detail: DreamDetail | undefined): string {
+  const planPath = `${dream.dir}/${dream.files.plan ?? "plan.mdx"}`;
+  const reportPath = `${dream.dir}/${dream.files.report ?? "report.md"}`;
+  const visualPaths = [
+    dream.files.canvas ? `${dream.dir}/${dream.files.canvas}` : "",
+    dream.files.prototype ? `${dream.dir}/${dream.files.prototype}` : "",
+    dream.files.prototypeHtml ? `${dream.dir}/${dream.files.prototypeHtml}` : "",
+    ...dream.files.images.map((image) => `${dream.dir}/${image}`),
+  ].filter(Boolean);
+  const contextPaths = [planPath, ...visualPaths];
+
+  return [
+    `/goal Implement the saved Loupe Dreamer plan at ${planPath} with the ship-feature skill.`,
+    "",
+    "Read the dream file as the source of truth for the goal, repo anchors, implementation plan, verification, and reporting requirements.",
+    contextPaths.length > 1 ? `Use these dream artifacts as needed: ${contextPaths.join(", ")}` : "",
+    dream.branch ? `Target branch/ref context: ${dream.branch}` : "",
+    detail?.content.report ? `Existing report: ${dream.dir}/report.md` : "",
+    `Write the final implementation report to ${reportPath}.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function providerActions(actions: ActionDescriptor[]): ActionDescriptor[] {

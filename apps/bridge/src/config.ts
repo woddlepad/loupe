@@ -116,8 +116,8 @@ export function defaultAgents(): Record<string, AgentCommand> {
 function claudeModels(): ActionModelOption[] {
   return [
     { id: "fable", label: "Fable 5", hint: "latest Claude coding model" },
-    { id: "sonnet", label: "Sonnet", hint: "balanced default" },
-    { id: "opus", label: "Opus", hint: "deep reasoning" },
+    { id: "sonnet", label: "Sonnet 5", hint: "balanced default" },
+    { id: "opus", label: "Opus 4.8", hint: "deep reasoning" },
   ];
 }
 

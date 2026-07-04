@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   Button,
+  ButtonGroup,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -312,11 +313,11 @@ function AgentModelButton({
   const selected = action.models?.find((model) => model.id === selectedModel) ?? action.models?.[0];
   const buttonVariant = isDefault ? "default" : "secondary";
   return (
-    <div data-slot="button-group" className="flex w-full items-stretch">
+    <ButtonGroup className="flex w-full items-stretch">
       <Button
         type="button"
         variant={buttonVariant}
-        className="min-w-0 flex-1 rounded-r-none"
+        className="min-w-0 flex-1"
         loading={submittingActionId === action.id}
         disabled={disabled}
         title={selected ? `${actionLabel(action)} with ${selected.label}` : action.hint}
@@ -331,7 +332,7 @@ function AgentModelButton({
           <Button
             type="button"
             variant={buttonVariant}
-            className="w-9 rounded-l-none border-l border-white/15 px-0"
+            className="w-9 px-0"
             disabled={disabled}
             title={`Choose ${actionLabel(action)} model`}
             aria-label={`Choose ${actionLabel(action)} model`}
@@ -356,7 +357,7 @@ function AgentModelButton({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-    </div>
+    </ButtonGroup>
   );
 }
 
