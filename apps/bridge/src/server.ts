@@ -445,7 +445,7 @@ async function handleAnnotate(
   registry: ActionRegistry,
   payload: AnnotatePayload,
 ) {
-  const { annotation, actions } = payload;
+  const { annotation, actions, actionModels } = payload;
   if (!annotation?.id) throw new Error("missing annotation");
 
   // Always write the committable bundle first, then run the chosen actions.
@@ -460,7 +460,7 @@ async function handleAnnotate(
       continue;
     }
     try {
-      results[id] = await action.run({ annotation, bundle, resolution, config });
+      results[id] = await action.run({ annotation, bundle, resolution, config, selectedModel: actionModels?.[id] });
     } catch (e) {
       results[id] = { ok: false, detail: String(e) };
     }
@@ -490,7 +490,7 @@ async function handleRecord(
   registry: ActionRegistry,
   payload: AnnotatePayload,
 ) {
-  const { annotation, actions } = payload;
+  const { annotation, actions, actionModels } = payload;
   if (!annotation?.id) throw new Error("missing annotation");
   if (annotation.kind !== "recording" || !annotation.recording) throw new Error("missing recording payload");
 
@@ -506,7 +506,7 @@ async function handleRecord(
       continue;
     }
     try {
-      results[id] = await action.run({ annotation, bundle, resolution, config });
+      results[id] = await action.run({ annotation, bundle, resolution, config, selectedModel: actionModels?.[id] });
     } catch (e) {
       results[id] = { ok: false, detail: String(e) };
     }
@@ -692,7 +692,7 @@ async function handleAnnotationRun(
   resolver: Resolver,
   registry: ActionRegistry,
   id: string,
-  body: { action: string },
+  body: { action: string; model?: string },
 ) {
   const actionId = body.action?.trim();
   if (!actionId) throw new Error("missing action");
@@ -703,7 +703,7 @@ async function handleAnnotationRun(
 
   const bundle = bundleFromStoredAnnotation(config.repoRoot, annotation);
   const resolution = (annotation as StoredAnnotation & { resolution?: SourceResolution }).resolution ?? resolver.resolve(annotation.target);
-  const outcome = await action.run({ annotation, bundle, resolution, config });
+  const outcome = await action.run({ annotation, bundle, resolution, config, selectedModel: body.model });
   console.log(`[loupe] annotation "${id}" → ${actionId}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
   return { ok: outcome.ok, action: actionId, count: 1, detail: outcome.detail, url: outcome.url };
 }
@@ -747,7 +747,7 @@ async function handleGroupRun(
   config: BridgeConfig,
   registry: ActionRegistry,
   slug: string,
-  body: { action: string },
+  body: { action: string; model?: string },
 ) {
   const items = listAnnotations(config.repoRoot).filter((a) => a.groupSlug === slug);
   if (items.length === 0) throw new Error(`group "${slug}" has no annotations`);
@@ -765,7 +765,7 @@ async function handleGroupRun(
       };
     }
     const logPath = resolve(config.repoRoot, ".loupe/annotations", slug, `agent-${body.action}.log`);
-    const outcome = await runAgentGroup(body.action, agentCmd, config, groupName, items, logPath);
+    const outcome = await runAgentGroup(body.action, agentCmd, config, groupName, items, logPath, body.model);
     console.log(`[loupe] group "${slug}" → ${body.action} (${items.length} items): ${outcome.detail}`);
     return { ok: outcome.ok, action: body.action, count: items.length, detail: outcome.detail };
   }

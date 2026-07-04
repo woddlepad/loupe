@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import type { ActionDescriptor, AnnotationStatus, NetworkEntry, PageErrorEntry } from "@loupe/core/model";
+import type { ActionDescriptor, Annotation, AnnotationStatus, NetworkEntry, PageErrorEntry } from "@loupe/core/model";
 import { LibraryPicker } from "@loupe/core";
 import type { LibraryItem } from "@loupe/core";
 import {
@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleCheck,
+  Copy,
   Crop,
   ExternalLink,
   Eye,
@@ -1467,6 +1468,11 @@ function useAnnotationActions(annotation: StoredAnnotation, ctx: ViewerContext) 
     setBusy(false);
   }
 
+  async function copyPrompt() {
+    if (!navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(savedAnnotationPromptText(annotation));
+  }
+
   async function setStatus(status: AnnotationStatus) {
     const r = (await chrome.runtime.sendMessage({ type: "update-annotation", id: annotation.id, patch: { status } } satisfies LoupeMessage)) as SimpleResult;
     if (r.ok) await ctx.reload();
@@ -1480,14 +1486,14 @@ function useAnnotationActions(annotation: StoredAnnotation, ctx: ViewerContext) 
     }
   }
 
-  return { busy, send, setStatus, remove };
+  return { busy, send, copyPrompt, setStatus, remove };
 }
 
 /** The full set of per-annotation menu entries, shared by the card's More button
  * and the right-click context menu. */
 function AnnotationMenuItems({ annotation, ctx }: { annotation: StoredAnnotation; ctx: ViewerContext }) {
   const sendable = ctx.actions.filter((a) => a.id !== "save");
-  const { busy, send, setStatus, remove } = useAnnotationActions(annotation, ctx);
+  const { busy, send, copyPrompt, setStatus, remove } = useAnnotationActions(annotation, ctx);
   const otherPage = pageKey(annotation.url) !== pageKey(location.href);
 
   return (
@@ -1506,6 +1512,10 @@ function AnnotationMenuItems({ annotation, ctx }: { annotation: StoredAnnotation
       </MenuItem>
       <MenuItem onSelect={() => void remove()} icon={<Trash2 className="h-3.5 w-3.5" />} tone="danger">
         Delete
+      </MenuItem>
+      <DropdownMenuSeparator />
+      <MenuItem onSelect={() => void copyPrompt()} icon={<Copy className="h-3.5 w-3.5" />}>
+        Copy prompt
       </MenuItem>
       {sendable.length > 0 ? <DropdownMenuSeparator /> : null}
       {sendable.map((a) => (
@@ -3064,6 +3074,28 @@ function displayActionLabel(action: ActionDescriptor): string {
   const i = cleaned.search(/[A-Za-z]/);
   if (i < 0) return cleaned;
   return cleaned.slice(0, i) + cleaned[i]!.toUpperCase() + cleaned.slice(i + 1);
+}
+
+function savedAnnotationPromptText(annotation: Annotation & { dir?: string }): string {
+  const component = annotation.target.componentChain.map((c) => c.name).join(" > ") || annotation.target.tag;
+  const lines = [
+    "Implement this Loupe UI annotation.",
+    "",
+    `Annotation id: ${annotation.id}`,
+    annotation.dir ? `Bundle: ${annotation.dir}` : "",
+    annotation.group ? `Group: ${annotation.group}` : "",
+    `Component: ${component}`,
+    annotation.target.dataAttributes["data-slot"] ? `Slot: ${annotation.target.dataAttributes["data-slot"]}` : "",
+    annotation.target.dataAttributes["data-testid"] ? `Test id: ${annotation.target.dataAttributes["data-testid"]}` : "",
+    `Selector: ${annotation.target.selector}`,
+    annotation.target.className ? `Class: ${annotation.target.className}` : "",
+    `Page: ${annotation.title}`,
+    `URL: ${annotation.url}`,
+  ].filter(Boolean);
+  if (annotation.note) lines.push("", "Requested change:", annotation.note);
+  if (annotation.target.text) lines.push("", `Selected text: ${annotation.target.text}`);
+  lines.push("", "Use the saved Loupe bundle screenshot/reference files if they are available.");
+  return lines.join("\n");
 }
 
 function compactLabel(value: string, limit: number): string {

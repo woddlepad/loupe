@@ -233,6 +233,19 @@ export interface ActionDescriptor {
   kind?: "builtin" | "agent" | "integration" | "custom";
   /** Optional one-line hint shown on hover. */
   hint?: string;
+  /** Optional model choices for agent actions that support per-run selection. */
+  models?: ActionModelOption[];
+  /** Model id used when the user has not picked one explicitly. */
+  defaultModel?: string;
+}
+
+export interface ActionModelOption {
+  /** CLI/API model id or alias, e.g. "fable", "gpt-5.5". */
+  id: string;
+  /** Human-readable label shown in the dropdown. */
+  label: string;
+  /** Optional short descriptor shown below the model label. */
+  hint?: string;
 }
 
 /** The payload the extension POSTs to the bridge. */
@@ -240,4 +253,6 @@ export interface AnnotatePayload {
   annotation: Annotation;
   /** Action ids to run. The annotation is always written to the repo first. */
   actions: string[];
+  /** Optional per-action model ids selected by the user. */
+  actionModels?: Record<string, string>;
 }

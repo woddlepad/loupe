@@ -129,7 +129,7 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: 
       fetchLibrary(),
     ]);
     overlay = new LoupeOverlay({
-      actions: enabledActions(actions, settings),
+      actions: withLocalActions(enabledActions(actions, settings)),
       groups,
       defaultGroup: lastGroup,
       createGroup,
@@ -157,8 +157,13 @@ function toggleView(): void {
   viewer.toggle();
 }
 
-async function handleSubmit(annotation: Annotation, actionIds: string[]): Promise<void> {
-  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds);
+async function handleSubmit(annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>): Promise<void> {
+  if (actionIds.includes("copy-prompt")) {
+    const detail = await copyAnnotationClipboard(annotation);
+    toast(detail);
+    return;
+  }
+  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds, actionModels);
   if (frozenScreenshotDataUrl) {
     annotation.screenshotDataUrl = await cropFrozenScreenshot(frozenScreenshotDataUrl, annotation.rect);
   } else {
@@ -191,7 +196,7 @@ async function handleSubmit(annotation: Annotation, actionIds: string[]): Promis
   await chrome.storage.local.set({ lastGroup: annotation.group ?? "" });
   const res = (await chrome.runtime.sendMessage({
     type: "annotate",
-    payload: { annotation, actions: actionsWithSave(actionIds) },
+    payload: { annotation, actions: actionsWithSave(actionIds), actionModels },
   } satisfies LoupeMessage)) as AnnotateResult;
   if (!res.ok) throw new Error(res.error);
   const ran = Object.entries(res.results)
@@ -200,10 +205,10 @@ async function handleSubmit(annotation: Annotation, actionIds: string[]): Promis
   toast(`${annotation.group ? `[${annotation.group}] ` : ""}saved → ${res.dir}${ran ? `\n${ran}` : ""}${clipboardDetail ? `\n${clipboardDetail}` : ""}`);
 }
 
-async function handleRecordingSubmit(annotation: Annotation, actionIds: string[]): Promise<void> {
+async function handleRecordingSubmit(annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>): Promise<void> {
   const res = (await chrome.runtime.sendMessage({
     type: "record",
-    payload: { annotation, actions: actionsWithSave(actionIds) },
+    payload: { annotation, actions: actionsWithSave(actionIds), actionModels },
   } satisfies LoupeMessage)) as AnnotateResult;
   if (!res.ok) throw new Error(res.error);
   const ran = Object.entries(res.results)
@@ -574,6 +579,7 @@ function collectInstrumentation(): Promise<{
 }
 
 function actionsWithSave(actionIds: string[]): string[] {
+  actionIds = actionIds.filter((id) => id !== "copy-prompt");
   if (actionIds.length === 0 || actionIds.includes("save")) return unique(actionIds);
   return ["save", ...unique(actionIds)];
 }
@@ -585,6 +591,19 @@ function unique(ids: string[]): string[] {
 async function fetchActions(): Promise<ActionDescriptor[]> {
   const res = (await chrome.runtime.sendMessage({ type: "actions" } satisfies LoupeMessage)) as ActionsResult;
   return res.ok ? res.actions : [{ id: "save", label: "Save to repo" }, { id: "claude", label: "Claude" }];
+}
+
+function withLocalActions(actions: ActionDescriptor[]): ActionDescriptor[] {
+  if (actions.some((action) => action.id === "copy-prompt")) return actions;
+  return [
+    ...actions,
+    {
+      id: "copy-prompt",
+      label: "Copy prompt",
+      kind: "builtin",
+      hint: "copy the generated agent prompt and screenshot to the clipboard",
+    },
+  ];
 }
 
 async function fetchGroups(): Promise<string[]> {

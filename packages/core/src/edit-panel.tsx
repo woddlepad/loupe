@@ -15,11 +15,20 @@ import type { ReactElement, ReactNode } from "react";
 import {
   Check,
   ChevronDown,
+  Copy,
   ImagePlus,
   Library,
   X,
 } from "lucide-react";
-import { Button, PortalContainerProvider, Textarea } from "@loupe/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  PortalContainerProvider,
+  Textarea,
+} from "@loupe/ui";
 import { C, GITHUB_LOGO_SVG, GITHUB_REPO_URL, LOUPE_LOGO_SVG } from "./overlay-classes.js";
 import { LibraryPicker } from "./library-picker.js";
 import type { ActionDescriptor, AnnotationTarget, Rect } from "./model.js";
@@ -83,7 +92,7 @@ export interface LoupeEditPanelProps {
   actions: ActionDescriptor[];
   defaultActionId: string;
   submittingActionId?: string | null;
-  onSubmit: (actionId: string) => void | Promise<void>;
+  onSubmit: (actionId: string, model?: string) => void | Promise<void>;
   error?: string | null;
 
   onClose: () => void;
@@ -139,6 +148,7 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
 
   const submitting = submittingActionId != null;
   const hasDefault = actions.some((a) => a.id === defaultActionId);
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>(() => defaultModels(actions));
 
   const onPanelKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
     if (
@@ -154,7 +164,7 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
     }
     if (!hasDefault || submitting) return;
     e.preventDefault();
-    void onSubmit(defaultActionId);
+    void onSubmit(defaultActionId, selectedModels[defaultActionId]);
   };
 
   return (
@@ -230,7 +240,35 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
         <div className={C.actions}>
           {actions.map((a) => {
             const isDefault = a.id === defaultActionId;
-            return (
+            if (a.id === "copy-prompt") {
+              return (
+                <Button
+                  key={a.id}
+                  type="button"
+                  variant="secondary"
+                  className="w-full"
+                  loading={submittingActionId === a.id}
+                  disabled={submitting && submittingActionId !== a.id}
+                  title={a.hint}
+                  onClick={() => void onSubmit(a.id)}
+                >
+                  <Copy width={15} height={15} aria-hidden />
+                  <span>{actionLabel(a)}</span>
+                </Button>
+              );
+            }
+            return a.models?.length ? (
+              <AgentModelButton
+                key={a.id}
+                action={a}
+                selectedModel={selectedModels[a.id] ?? a.defaultModel ?? a.models[0]?.id}
+                isDefault={isDefault}
+                submittingActionId={submittingActionId}
+                disabled={submitting && submittingActionId !== a.id}
+                onModelChange={(model) => setSelectedModels((current) => ({ ...current, [a.id]: model }))}
+                onSubmit={(model) => void onSubmit(a.id, model)}
+              />
+            ) : (
               <Button
                 key={a.id}
                 type="button"
@@ -251,6 +289,82 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
         <BrandFooter />
       </div>
     </div>
+  );
+}
+
+function AgentModelButton({
+  action,
+  selectedModel,
+  isDefault,
+  submittingActionId,
+  disabled,
+  onModelChange,
+  onSubmit,
+}: {
+  action: ActionDescriptor;
+  selectedModel: string | undefined;
+  isDefault: boolean;
+  submittingActionId?: string | null;
+  disabled?: boolean;
+  onModelChange: (model: string) => void;
+  onSubmit: (model?: string) => void;
+}): ReactElement {
+  const selected = action.models?.find((model) => model.id === selectedModel) ?? action.models?.[0];
+  const buttonVariant = isDefault ? "default" : "secondary";
+  return (
+    <div data-slot="button-group" className="flex w-full items-stretch">
+      <Button
+        type="button"
+        variant={buttonVariant}
+        className="min-w-0 flex-1 rounded-r-none"
+        loading={submittingActionId === action.id}
+        disabled={disabled}
+        title={selected ? `${actionLabel(action)} with ${selected.label}` : action.hint}
+        onClick={() => onSubmit(selected?.id)}
+      >
+        <ActionIcon action={action} />
+        <span className="min-w-0 truncate">{actionLabel(action)}</span>
+        {selected ? <span className="min-w-0 truncate text-[11px] opacity-75">{selected.label}</span> : null}
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant={buttonVariant}
+            className="w-9 rounded-l-none border-l border-white/15 px-0"
+            disabled={disabled}
+            title={`Choose ${actionLabel(action)} model`}
+            aria-label={`Choose ${actionLabel(action)} model`}
+          >
+            <ChevronDown width={15} height={15} aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          {(action.models ?? []).map((model) => (
+            <DropdownMenuItem key={model.id} onSelect={() => onModelChange(model.id)} className="items-start">
+              <Check
+                width={14}
+                height={14}
+                className={model.id === selected?.id ? "mt-0.5 opacity-100" : "mt-0.5 opacity-0"}
+                aria-hidden
+              />
+              <span className="min-w-0">
+                <span className="block truncate">{model.label}</span>
+                {model.hint ? <span className="block truncate text-[11px] text-muted-foreground">{model.hint}</span> : null}
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function defaultModels(actions: ActionDescriptor[]): Record<string, string> {
+  return Object.fromEntries(
+    actions
+      .map((action) => [action.id, action.defaultModel ?? action.models?.[0]?.id])
+      .filter((entry): entry is [string, string] => Boolean(entry[1])),
   );
 }
 

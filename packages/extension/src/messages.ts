@@ -30,9 +30,9 @@ export type LoupeMessage =
   | { type: "delete-group"; slug: string }
   | { type: "move-annotation"; id: string; group: string }
   | { type: "reorder-groups"; slugs: string[] }
-  | { type: "group-run"; slug: string; action: string }
+  | { type: "group-run"; slug: string; action: string; model?: string }
   | { type: "resolve-group"; slug: string }
-  | { type: "annotation-run"; id: string; action: string }
+  | { type: "annotation-run"; id: string; action: string; model?: string }
   | { type: "resolve-target"; target: AnnotationTarget }
   | { type: "references" }
   | { type: "reference-image"; id: string }

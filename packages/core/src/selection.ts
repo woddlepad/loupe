@@ -7,7 +7,7 @@ import type { ActionDescriptor, Annotation, AnnotationTarget, Rect, RecordingCap
 
 export interface LoupeOverlayOptions {
   /** Called when the user picks an action. Returns when delivery is done. */
-  onSubmit: (annotation: Annotation, actionIds: string[]) => void | Promise<void>;
+  onSubmit: (annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>) => void | Promise<void>;
   /** Called once when the user finishes a click/drag selection. */
   onSelectionCapture?: (selection: { rect: Rect; devicePixelRatio: number }) => void | Promise<void>;
   /** Actions to render as buttons (advertised by the bridge). */
@@ -839,7 +839,7 @@ export class LoupeOverlay {
       actions: cfg.actions,
       defaultActionId: cfg.defaultActionId,
       submittingActionId: this.editSubmitting,
-      onSubmit: (actionId) => this.editSubmitAction(actionId),
+      onSubmit: (actionId, model) => this.editSubmitAction(actionId, model),
       error: this.editError,
       onClose: cfg.onClose,
       panelRef: this.handlePanelRef,
@@ -859,7 +859,7 @@ export class LoupeOverlay {
   };
 
   /** Send the annotation for one action, disabling the panel + surfacing errors. */
-  private async editSubmitAction(actionId: string): Promise<void> {
+  private async editSubmitAction(actionId: string, model?: string): Promise<void> {
     if (this.editSubmitting || !this.editConfig) return;
     this.editSubmitting = actionId;
     this.editError = null;
@@ -867,7 +867,7 @@ export class LoupeOverlay {
     const annotation = this.editConfig.buildAnnotation();
     const isRecording = this.editConfig.variant === "recording";
     try {
-      await this.opts.onSubmit(annotation, [actionId]);
+      await this.opts.onSubmit(annotation, [actionId], model ? { [actionId]: model } : undefined);
       this.disable();
     } catch (err) {
       this.editSubmitting = null;

@@ -1,4 +1,4 @@
-import type { Annotation } from "@loupe/core/model";
+import type { ActionModelOption, Annotation } from "@loupe/core/model";
 import type { BridgeConfig } from "../config.js";
 import type { WrittenBundle } from "../bundle.js";
 import type { SourceResolution } from "../resolve/index.js";
@@ -10,6 +10,7 @@ export interface ActionContext {
   bundle: WrittenBundle;
   resolution: SourceResolution;
   config: BridgeConfig;
+  selectedModel?: string;
 }
 
 export interface ActionOutcome {
@@ -29,6 +30,8 @@ export interface Action {
   label: string;
   kind?: "builtin" | "agent" | "integration" | "custom";
   hint?: string;
+  models?: ActionModelOption[];
+  defaultModel?: string;
   run(ctx: ActionContext): Promise<ActionOutcome> | ActionOutcome;
 }
 

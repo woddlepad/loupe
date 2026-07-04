@@ -16,6 +16,33 @@ test("expands Claude default to background Loupe slash command", () => {
   ]);
 });
 
+test("expands selected models into agent argv", () => {
+  assert.deepEqual(
+    expandAgentArgv(
+      { mode: "spawn", argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] },
+      "inline prompt",
+      "/loupe dde8f08a",
+      undefined,
+      [],
+      process.cwd(),
+      "fable",
+    ),
+    ["claude", "--model", "fable", "--permission-mode", "auto", "--bg", "/loupe dde8f08a"],
+  );
+  assert.deepEqual(
+    expandAgentArgv(
+      { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"] },
+      "inline prompt",
+      "/loupe notes",
+      undefined,
+      [],
+      process.cwd(),
+      "gpt-5.5",
+    ),
+    ["codex", "--model", "gpt-5.5", "exec", "/loupe notes"],
+  );
+});
+
 test("expands Codex image args and inline prompt", () => {
   const cmd: AgentCommand = { mode: "spawn", argv: ["codex", "exec", "{imageArgs}", "{prompt}"] };
   assert.deepEqual(expandAgentArgv(cmd, "fix it", "/loupe notes", undefined, ["shot.png", "ref.png"]), [
@@ -35,7 +62,9 @@ test("defaults Codex to background local exec", () => {
   delete process.env.CODEX_CLOUD_ENV;
   delete process.env.LOUPE_CODEX_APP_SERVER;
   try {
-    assert.deepEqual(defaultAgents().codex, { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"] });
+    const codex = defaultAgents().codex;
+    assert.deepEqual(codex?.argv, ["codex", "exec", "{loupeCommand}"]);
+    assert.equal(codex?.defaultModel, "gpt-5.5");
     assert.deepEqual(expandAgentArgv(codexBackgroundAgent(), "inline prompt", "/loupe notes", undefined, []), [
       "codex",
       "exec",

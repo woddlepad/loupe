@@ -45,6 +45,8 @@ export class ActionRegistry {
       label: a.label,
       kind: a.kind,
       hint: a.hint,
+      models: a.models,
+      defaultModel: a.defaultModel,
     }));
   }
 }

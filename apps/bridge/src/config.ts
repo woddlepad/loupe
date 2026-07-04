@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { ActionModelOption } from "@loupe/core/model";
 import type { LinearConfig } from "./actions/linear.js";
 
 export type CodexLaunchMode = "background" | "url-handler";
@@ -31,6 +32,12 @@ export interface AgentCommand {
   argv?: string[];
   /** Unix socket for the Codex app-server daemon; defaults to $CODEX_HOME/app-server-control/app-server-control.sock. */
   socketPath?: string;
+  /** Model choices advertised to the Loupe panel for this agent. */
+  models?: ActionModelOption[];
+  /** Model used when the panel has not sent a selected model. */
+  defaultModel?: string;
+  /** Extra argv inserted after argv[0] when a model is selected. Defaults to ["--model", "{model}"]. */
+  modelArgv?: string[];
 }
 
 export interface BridgeConfig {
@@ -58,14 +65,20 @@ export interface BridgeConfig {
 
 export function codexBackgroundAgent(): AgentCommand {
   const codexCloudEnv = process.env["LOUPE_CODEX_CLOUD_ENV"] ?? process.env["CODEX_CLOUD_ENV"];
+  const models = codexModels();
   if (codexCloudEnv) {
-    return { mode: "spawn", argv: ["codex", "cloud", "exec", "--env", codexCloudEnv, "{loupeCommand}"] };
+    return {
+      mode: "spawn",
+      argv: ["codex", "cloud", "exec", "--env", codexCloudEnv, "{loupeCommand}"],
+      models,
+      defaultModel: "gpt-5.5",
+    };
   }
-  return { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"] };
+  return { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"], models, defaultModel: "gpt-5.5" };
 }
 
 export function codexUrlHandlerAgent(): AgentCommand {
-  return { mode: "codex-app" };
+  return { mode: "codex-app", models: codexModels(), defaultModel: "gpt-5.5" };
 }
 
 export function defaultAgents(): Record<string, AgentCommand> {
@@ -73,11 +86,21 @@ export function defaultAgents(): Record<string, AgentCommand> {
   return {
     // Claude: start a background Claude Code run that picks up the saved Loupe
     // bundle through the installed /loupe slash command.
-    claude: { mode: "spawn", argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"] },
+    claude: {
+      mode: "spawn",
+      argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"],
+      models: claudeModels(),
+      defaultModel: "fable",
+    },
     // Codex: run in the background by default. For remote Desktop handoff,
     // LOUPE_CODEX_APP_SERVER keeps the existing app-server behavior explicit.
     codex: codexAppServer
-      ? { mode: "codex-app-server", socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"] }
+      ? {
+          mode: "codex-app-server",
+          socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"],
+          models: codexModels(),
+          defaultModel: "gpt-5.5",
+        }
       : codexBackgroundAgent(),
     // GitHub Copilot CLI: the standalone `copilot` binary (not the deprecated
     // `gh copilot` extension). It has no /loupe shim, so it receives the full
@@ -88,6 +111,23 @@ export function defaultAgents(): Record<string, AgentCommand> {
     // `@path` (pi is vision-capable) so it can actually see the screenshot.
     pi: { mode: "spawn", argv: ["pi", "-p", "{atImages}", "{prompt}"] },
   };
+}
+
+function claudeModels(): ActionModelOption[] {
+  return [
+    { id: "fable", label: "Fable 5", hint: "latest Claude coding model" },
+    { id: "sonnet", label: "Sonnet", hint: "balanced default" },
+    { id: "opus", label: "Opus", hint: "deep reasoning" },
+  ];
+}
+
+function codexModels(): ActionModelOption[] {
+  return [
+    { id: "gpt-5.5", label: "GPT-5.5", hint: "frontier coding model" },
+    { id: "gpt-5.4", label: "GPT-5.4", hint: "strong everyday coding" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster, lower cost" },
+    { id: "gpt-5.3-codex-spark", label: "Codex Spark", hint: "ultra-fast coding" },
+  ];
 }
 
 const DEFAULTS: BridgeConfig = {

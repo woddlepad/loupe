@@ -25,13 +25,15 @@ export function agentActions(config: BridgeConfig): Action[] {
       label: capitalize(name),
       kind: "agent",
       hint: agentHint(name, cmd),
+      models: cmd.models,
+      defaultModel: cmd.defaultModel,
       run: (ctx: ActionContext) =>
         cmd.mode === "session"
           ? sessionOutcome(name, ctx)
           : cmd.mode === "codex-app-server"
-            ? openCodexAppServer(name, cmd, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
+            ? openCodexAppServer(name, cmd, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`, selectedModel(cmd, ctx.selectedModel))
             : cmd.mode === "codex-app"
-              ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`)
+              ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`, selectedModel(cmd, ctx.selectedModel))
               : runAgent(name, cmd, ctx),
     }));
 }
@@ -83,6 +85,7 @@ function runAgent(name: string, cmd: AgentCommand, ctx: ActionContext): ActionOu
     ctx.bundle,
     images,
     join(ctx.bundle.absDir, `agent-${name}.log`),
+    selectedModel(cmd, ctx.selectedModel),
   );
 }
 
@@ -94,11 +97,13 @@ export function runAgentGroup(
   group: string,
   annotations: StoredAnnotation[],
   groupLogPath: string,
+  model?: string,
 ): ActionOutcome | Promise<ActionOutcome> {
-  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, `/loupe ${group}`);
-  if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, `/loupe ${group}`);
+  const chosenModel = selectedModel(cmd, model);
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, `/loupe ${group}`, chosenModel);
+  if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, `/loupe ${group}`, chosenModel);
   const prompt = buildGroupPrompt(name, group, annotations);
-  return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath);
+  return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath, chosenModel);
 }
 
 /** Run one configured bridge agent against a saved Dreamer implementation plan. */
@@ -154,8 +159,8 @@ export function buildDreamLaunchPrompt(dream: DreamDetail): string {
     .join("\n");
 }
 
-function openCodexApp(name: string, repoRoot: string, loupeCommand: string): ActionOutcome {
-  const url = buildCodexUrl(loupeCommand, repoRoot);
+function openCodexApp(name: string, repoRoot: string, loupeCommand: string, model?: string): ActionOutcome {
+  const url = buildCodexUrl(loupeCommand, repoRoot, model);
   const argv = openerArgv(url);
   const command = argv[0]!;
   const args = argv.slice(1);
@@ -177,6 +182,7 @@ async function openCodexAppServer(
   cmd: AgentCommand,
   repoRoot: string,
   loupeCommand: string,
+  model?: string,
 ): Promise<ActionOutcome> {
   const socketPath = cmd.socketPath ?? defaultCodexAppServerSocketPath();
   if (!existsSync(socketPath)) {
@@ -199,7 +205,7 @@ async function openCodexAppServer(
     });
     client.notify("initialized");
 
-    const started = await client.call("thread/start", { cwd: repoRoot });
+    const started = await client.call("thread/start", { cwd: repoRoot, ...(model ? { model } : {}) });
     const threadId = jsonPath(started, ["thread", "id"]);
     if (typeof threadId !== "string" || !threadId) {
       return { ok: false, detail: `${name}: thread/start did not return a thread id` };
@@ -228,9 +234,10 @@ function spawnAgent(
   bundle: WrittenBundle | undefined,
   images: string[],
   logPath: string,
+  model?: string,
 ): ActionOutcome {
   if (!cmd.argv?.length) return { ok: false, detail: `${name}: no argv configured` };
-  const argv = expandAgentArgv(cmd, prompt, loupeCommand, bundle, images, cwd);
+  const argv = expandAgentArgv(cmd, prompt, loupeCommand, bundle, images, cwd, model);
   if (!commandAvailable(argv[0]!)) {
     return { ok: false, detail: `${name}: command not found (${argv[0]})` };
   }
@@ -252,8 +259,10 @@ export function expandAgentArgv(
   bundle: WrittenBundle | undefined,
   images: string[],
   repoRoot = process.cwd(),
+  model?: string,
 ): string[] {
-  return (cmd.argv ?? []).flatMap((a) => {
+  const argv = model ? withModelArgv(cmd, model) : (cmd.argv ?? []);
+  return argv.flatMap((a) => {
     // {imageArgs} expands to `-i path1,path2` (Codex) or nothing when no images.
     if (a === "{imageArgs}") return images.length ? ["-i", images.join(",")] : [];
     // {atImages} expands to one `@path` arg per image (Pi) or nothing when empty.
@@ -278,9 +287,24 @@ export function commandAvailable(command: string): boolean {
   return path.split(":").some((dir) => existsSync(join(dir, command)));
 }
 
-export function buildCodexUrl(loupeCommand: string, repoRoot: string): string {
+export function buildCodexUrl(loupeCommand: string, repoRoot: string, model?: string): string {
   const params = new URLSearchParams({ prompt: loupeCommand, path: repoRoot });
+  if (model) params.set("model", model);
   return `codex://new?${params.toString()}`;
+}
+
+function selectedModel(cmd: AgentCommand, model: string | undefined): string | undefined {
+  const chosen = model?.trim() || cmd.defaultModel?.trim();
+  if (!chosen) return undefined;
+  if (!cmd.models?.length) return chosen;
+  return cmd.models.some((option) => option.id === chosen) ? chosen : cmd.defaultModel;
+}
+
+function withModelArgv(cmd: AgentCommand, model: string): string[] {
+  const argv = cmd.argv ?? [];
+  if (!argv.length) return argv;
+  const modelArgv = (cmd.modelArgv ?? ["--model", "{model}"]).map((arg) => arg.replaceAll("{model}", model));
+  return [argv[0]!, ...modelArgv, ...argv.slice(1)];
 }
 
 function openerArgv(url: string): string[] {
