@@ -143,6 +143,16 @@ button:not(:disabled),
   }
 
   .dreamer-mermaid svg {
+    display: block;
+    height: auto;
     max-width: 100%;
+  }
+
+  .dreamer-mermaid {
+    @apply my-4 overflow-auto rounded-lg border bg-card p-4;
+  }
+
+  .dreamer-mermaid-error {
+    @apply border-destructive/50 text-destructive;
   }
 }

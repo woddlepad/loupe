@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -134,6 +135,7 @@ const PLAN_SORT_OPTIONS: { label: string; value: PlanSort }[] = [
 
 const KNOWN_AGENT_IDS = new Set(["claude", "codex", "copilot", "pi"]);
 const MODEL_SELECTIONS_STORAGE_KEY = "loupe:agent-model-selections";
+const MERMAID_LANGUAGE_CLASS = /\blanguage-mermaid\b/;
 
 const EMPTY_MARKDOWN = `## Background
 
@@ -914,9 +916,120 @@ function PlanMarkdown({ markdown }: { markdown: string }) {
 function MarkdownArticle({ markdown }: { markdown: string }) {
   return (
     <article className="markdown-body max-w-none">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+      <ReactMarkdown
+        components={{
+          code({ className, children, node: _node, ...props }) {
+            return (
+              <code className={className} {...props}>
+                {children}
+              </code>
+            );
+          },
+          pre({ children, node: _node, ...props }) {
+            const chart = mermaidChartFromPreChildren(children);
+            if (chart) return <MermaidDiagram chart={chart} />;
+            return <pre {...props}>{children}</pre>;
+          },
+        }}
+        remarkPlugins={[remarkGfm]}
+      >
+        {markdown}
+      </ReactMarkdown>
     </article>
   );
+}
+
+function mermaidChartFromPreChildren(children: React.ReactNode): string | undefined {
+  const child = React.Children.toArray(children)[0];
+  if (!React.isValidElement<{ className?: string; children?: React.ReactNode }>(child)) return undefined;
+  if (!MERMAID_LANGUAGE_CLASS.test(child.props.className ?? "")) return undefined;
+  const chart = React.Children.toArray(child.props.children).join("").trim();
+  return chart.length > 0 ? chart : undefined;
+}
+
+let mermaidInitialized = false;
+let mermaidRenderSequence = 0;
+
+function ensureMermaidInitialized() {
+  if (mermaidInitialized) return;
+  mermaid.initialize({
+    flowchart: { htmlLabels: true },
+    securityLevel: "strict",
+    startOnLoad: false,
+    theme: "dark",
+    themeVariables: {
+      background: "#151515",
+      fontFamily: "var(--font-sans)",
+      lineColor: "#a3a3a3",
+      primaryBorderColor: "#666666",
+      primaryColor: "#242424",
+      primaryTextColor: "#f4f4f4",
+      secondaryColor: "#151515",
+      tertiaryColor: "#080808",
+    },
+  });
+  mermaidInitialized = true;
+}
+
+function MermaidDiagram({ chart }: { chart: string }) {
+  const instanceId = React.useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const bindFunctionsRef = React.useRef<((element: Element) => void) | undefined>(undefined);
+  const [renderState, setRenderState] = React.useState<
+    | { kind: "loading" }
+    | { kind: "rendered"; svg: string }
+    | { kind: "error"; message: string }
+  >({ kind: "loading" });
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const renderId = `dreamer-mermaid-${instanceId}-${++mermaidRenderSequence}`;
+
+    async function render() {
+      try {
+        ensureMermaidInitialized();
+        const result = await mermaid.render(renderId, chart);
+        if (cancelled) return;
+        bindFunctionsRef.current = result.bindFunctions;
+        setRenderState({ kind: "rendered", svg: result.svg });
+      } catch (error) {
+        if (cancelled) return;
+        setRenderState({
+          kind: "error",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    setRenderState({ kind: "loading" });
+    void render();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chart, instanceId]);
+
+  React.useEffect(() => {
+    if (renderState.kind !== "rendered" || !containerRef.current) return;
+    bindFunctionsRef.current?.(containerRef.current);
+  }, [renderState]);
+
+  if (renderState.kind === "error") {
+    return (
+      <div className="dreamer-mermaid dreamer-mermaid-error">
+        <p>Unable to render Mermaid diagram: {renderState.message}</p>
+        <pre>
+          <code>{chart}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  if (renderState.kind === "loading") {
+    return <div className="dreamer-mermaid text-sm text-muted-foreground">Rendering diagram...</div>;
+  }
+
+  return <div className="dreamer-mermaid" dangerouslySetInnerHTML={{ __html: renderState.svg }} ref={containerRef} />;
 }
 
 function ReportsView({
