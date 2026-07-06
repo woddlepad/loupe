@@ -138,10 +138,13 @@ export function buildDreamLaunchPrompt(dream: DreamDetail): string {
     ...dream.files.images.map((image) => `${dream.dir}/${image}`),
   ].filter(Boolean);
   const contextPaths = [planPath, ...visualPaths];
+  const goal = dream.goal?.trim() || `Implement the saved Loupe Dreamer plan at ${planPath}.`;
 
   return [
-    `/goal Implement the saved Loupe Dreamer plan at ${planPath} with the ship-feature skill.`,
+    `/goal ${goal}`,
     "",
+    `Use the ship-feature skill to implement the saved Loupe Dreamer plan at ${planPath}.`,
+    "This is an implementation launch, not a request to create another dream.",
     "Read the dream file as the source of truth for the goal, repo anchors, implementation plan, verification, and reporting requirements.",
     contextPaths.length > 1 ? `Use these dream artifacts as needed: ${contextPaths.join(", ")}` : "",
     dream.branch ? `Target branch/ref context: ${dream.branch}` : "",
