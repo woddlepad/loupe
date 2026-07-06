@@ -48,10 +48,10 @@ npm install -g @woddlepad/loupe
 loupe install-skill
 ```
 
-`loupe install-skill` installs the Codex `loupe` skill and the Claude Code
-`/loupe` slash command, so both agents know how to pick up saved annotations.
-If npm returns `404` before the first public release, use the source build path
-below.
+`loupe install-skill` installs the Codex `loupe` and `dream` skills plus the
+Claude Code `/loupe` and `/dream` slash commands, so agents know how to pick up
+saved annotations and create Dreamer plans. If npm returns `404` before the
+first public release, use the source build path below.
 
 Install the browser extension:
 
@@ -136,6 +136,16 @@ When an agent finishes, it should move each annotation to review:
 loupe status dde8f08a --status needs_review --author agent:codex
 ```
 
+Open Dreamer when you want to plan and launch larger work:
+
+```sh
+loupe dreamer
+open "$(loupe dreamer)"
+```
+
+Dreamer reads implementation plans from `.loupe/dreams/`. Create one from
+Claude Code with `/dream <goal>` or from Codex by asking it to use `$dream`.
+
 ## Why
 
 The usual UI-feedback loop is lossy: you spot something off, screenshot it, paste
@@ -161,6 +171,9 @@ vague vibe.
   and drop-in `.loupe/actions/*.mjs` custom actions ("send it to *my* tracker").
 - 🗂️ **Groups** — batch annotations (e.g. *notes UI refactor*) and dispatch the
   whole set to one agent session, no cross-contamination.
+- 🌙 **Dreamer plans** — turn larger goals into visual implementation plans under
+  `.loupe/dreams/`, review or edit them in the bridge UI, and launch an
+  overnight agent run with the right repo, branch, artifacts, and report path.
 - ✅ **Review workflow** — annotations are files with a lifecycle status. The
   agent moves each one to *needs review* when it's implemented, and you resolve
   (or reopen) it from the overlay.
@@ -228,6 +241,14 @@ Everything is written into your repo under `.loupe/`, meant to be committed:
         meta.json                     # component, source, rect, status, suggestions
         refs/ref-1.png                # reference images
   references/                         # cross-site captures (e.g. Notion)
+  dreams/
+    keyboard-shortcuts/
+      dream.json                      # title, goal, status, priority, branch
+      plan.mdx                        # implementation plan
+      canvas.mdx                      # optional diagrams / flow maps
+      prototype.mdx                   # optional UI sketch
+      prototype.html                  # optional iframe-rendered prototype
+      report.md                       # agent-written implementation report
 ```
 
 ## CLI
@@ -238,6 +259,9 @@ Loupe ships a small CLI for humans and agents:
 loupe bridge [--repo <path>] [--port 7337] [--host 127.0.0.1]
 loupe init [--repo <path>] [--name <name>] [--origin <host[:port]>] [--port <port>]
 loupe list [--repo <path>] [--json]
+loupe dreams [--repo <path>] [--json]
+loupe dream <dream_id> [--repo <path>] [--json]
+loupe dreamer [--repo <path>] [--port 7337] [--host 127.0.0.1]
 loupe show <group|annotation_id> [--repo <path>] [--json]
 loupe status <annotation_id> --status needs_review [--author agent:codex] [--repo <path>]
 ```
@@ -270,6 +294,57 @@ http://danis-mbp.tail123.ts.net:7337
 
 Keep this on a private network. The bridge accepts annotation writes and can
 launch configured local agent commands on the target machine.
+
+## Dreamer
+
+Dreamer is Loupe's planning surface for larger changes that should be reviewed
+before an agent starts implementing. It is served by the same bridge at
+`/dreamer` and stores every plan in the target repo, so plans and reports can be
+committed, reviewed, and resumed like annotations.
+
+Create a plan from Claude Code:
+
+```text
+/dream add keyboard shortcuts to the billing table
+```
+
+Or in Codex:
+
+```text
+Use $dream to plan keyboard shortcuts for the billing table
+```
+
+The Dream skill researches the repo and writes a read-only artifact under
+`.loupe/dreams/<id>/`:
+
+```text
+.loupe/dreams/<id>/
+  dream.json       # title, goal, status, priority, branch, timestamps
+  plan.mdx         # repo findings, behavior, implementation steps, verification
+  canvas.mdx       # optional journey maps, diagrams, or data-flow notes
+  prototype.mdx    # optional UI or interaction sketch
+  prototype.html   # optional iframe-rendered prototype
+  report.md        # written by the implementing agent
+```
+
+Open the Dreamer UI with:
+
+```sh
+loupe dreamer
+```
+
+While `loupe bridge` is running, Dreamer lets you:
+
+- review plans sorted by recommendation, priority, branch, or title
+- create or edit plan metadata and markdown directly in the browser
+- view MDX plans, Mermaid diagrams, images, prototypes, and implementation reports
+- launch any installed agent provider against a plan, including model selection
+- copy the exact launch prompt, reset a running plan, or delete stale plans
+
+Launching a plan sends the agent a `/goal` prompt that tells it to implement the
+saved Dreamer plan with `ship-feature`, read the plan and visual artifacts as
+source of truth, and write the final implementation report back to
+`.loupe/dreams/<id>/report.md`.
 
 ## Actions
 
