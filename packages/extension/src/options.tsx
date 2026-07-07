@@ -157,9 +157,9 @@ function App() {
         text: [
           `Daemon not reachable at ${url}.`,
           "",
-          "Install the Loupe CLI:",
-          "  npm install -g @woddlepad/loupe",
-          "  # or from a source checkout: pnpm install:cli",
+          "Install Loupe from the source checkout:",
+          "  cd /path/to/loupe",
+          "  pnpm install",
           "",
           "Then from your app repo:",
           "  loupe init",

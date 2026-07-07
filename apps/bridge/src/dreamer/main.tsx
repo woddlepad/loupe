@@ -14,6 +14,8 @@ import {
   ImageIcon,
   ListFilter,
   Loader2,
+  Maximize2,
+  Minimize2,
   MoreHorizontal,
   Pencil,
   Play,
@@ -544,9 +546,7 @@ function App() {
                           <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">
                             {activeDraft?.title ?? selectedPlan?.title}
                           </h2>
-                          <p className="max-w-3xl text-sm text-muted-foreground">
-                            {activeDraft?.summary || selectedPlan?.summary}
-                          </p>
+                          <CollapsibleSummary summary={activeDraft?.summary || selectedPlan?.summary} />
                           {selectedDetail && visualTabs.length > 1 ? (
                             <div className="flex flex-wrap gap-1 pt-1">
                               {visualTabs.map((tab) => (
@@ -892,8 +892,7 @@ function VisualContent({
   if (tab === "prototype") {
     if (detail.files.prototypeHtml) {
       return (
-        <iframe
-          className="h-full w-full border-0 bg-white"
+        <PrototypeFrame
           src={assetUrl(detail.id, detail.files.prototypeHtml, repoRootParam)}
           title={`${detail.title} prototype`}
         />
@@ -903,6 +902,95 @@ function VisualContent({
   }
   if (tab === "report") return <PlanMarkdown markdown={detail.content.report ?? ""} />;
   return <PlanMarkdown markdown={detail.content.plan ?? ""} />;
+}
+
+function PrototypeFrame({ src, title }: { src: string; title: string }) {
+  const frameRef = React.useRef<HTMLIFrameElement>(null);
+  const shellRef = React.useRef<HTMLDivElement>(null);
+  const frameClickCleanupRef = React.useRef<(() => void) | null>(null);
+  const [fullscreen, setFullscreen] = React.useState(false);
+
+  const requestPrototypeFullscreen = React.useCallback(async () => {
+    const shell = shellRef.current;
+    if (!shell || document.fullscreenElement === shell || !shell.requestFullscreen) return;
+    try {
+      await shell.requestFullscreen();
+    } catch {
+      // Browsers can deny fullscreen when the click did not carry user activation.
+    }
+  }, []);
+
+  const togglePrototypeFullscreen = React.useCallback(async () => {
+    if (document.fullscreenElement === shellRef.current) {
+      await document.exitFullscreen?.();
+      return;
+    }
+    await requestPrototypeFullscreen();
+  }, [requestPrototypeFullscreen]);
+
+  const connectFrameClick = React.useCallback(() => {
+    const frame = frameRef.current;
+    let frameDocument: Document | null | undefined;
+    try {
+      frameDocument = frame?.contentDocument;
+    } catch {
+      frameDocument = null;
+    }
+    if (!frameDocument) return undefined;
+    frameClickCleanupRef.current?.();
+
+    const onClick = () => {
+      void requestPrototypeFullscreen();
+    };
+    frameDocument.addEventListener("click", onClick, true);
+    const cleanup = () => frameDocument.removeEventListener("click", onClick, true);
+    frameClickCleanupRef.current = cleanup;
+    return cleanup;
+  }, [requestPrototypeFullscreen]);
+
+  React.useEffect(() => {
+    connectFrameClick();
+    return () => {
+      frameClickCleanupRef.current?.();
+      frameClickCleanupRef.current = null;
+    };
+  }, [connectFrameClick, src]);
+
+  React.useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === shellRef.current);
+    updateFullscreen();
+    document.addEventListener("fullscreenchange", updateFullscreen);
+    return () => document.removeEventListener("fullscreenchange", updateFullscreen);
+  }, []);
+
+  return (
+    <div className="dreamer-prototype-shell group" ref={shellRef}>
+      <iframe
+        allowFullScreen
+        className="dreamer-prototype-frame"
+        onLoad={() => {
+          connectFrameClick();
+        }}
+        ref={frameRef}
+        src={src}
+        title={title}
+      />
+      <Button
+        aria-label={fullscreen ? "Exit prototype fullscreen" : "View prototype fullscreen"}
+        className={cn(
+          "dreamer-prototype-fullscreen-button",
+          fullscreen ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100",
+        )}
+        onClick={() => void togglePrototypeFullscreen()}
+        size="icon-sm"
+        title={fullscreen ? "Exit fullscreen" : "View fullscreen"}
+        type="button"
+        variant="secondary"
+      >
+        {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+      </Button>
+    </div>
+  );
 }
 
 function PlanMarkdown({ markdown }: { markdown: string }) {
@@ -1118,7 +1206,7 @@ function ReportsView({
 
 function StatusMessage({ state }: { state: LaunchState }) {
   if (state.kind === "idle") {
-    return <p className="text-xs text-muted-foreground">Launches run on the machine serving this page.</p>;
+    return null;
   }
   return (
     <div
@@ -1133,6 +1221,56 @@ function StatusMessage({ state }: { state: LaunchState }) {
         {state.kind === "ok" ? <CheckCircle2 className="size-4" /> : <ExternalLink className="size-4" />}
         <span>{state.message}</span>
       </div>
+    </div>
+  );
+}
+
+function CollapsibleSummary({ summary }: { summary?: string }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const [canExpand, setCanExpand] = React.useState(false);
+  const summaryRef = React.useRef<HTMLParagraphElement | null>(null);
+  const text = summary?.trim() ?? "";
+
+  React.useEffect(() => {
+    setExpanded(false);
+  }, [text]);
+
+  React.useLayoutEffect(() => {
+    const element = summaryRef.current;
+    if (!element || !text) {
+      setCanExpand(false);
+      return;
+    }
+
+    const updateCanExpand = () => {
+      setCanExpand(element.scrollHeight > element.clientHeight + 1);
+    };
+    updateCanExpand();
+
+    const observer = new ResizeObserver(updateCanExpand);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+
+  if (!text) return null;
+
+  return (
+    <div className="max-w-3xl">
+      <p
+        ref={summaryRef}
+        className={cn("text-sm text-muted-foreground", !expanded && "dreamer-summary-clamp")}
+      >
+        {text}
+      </p>
+      {canExpand || expanded ? (
+        <button
+          className="mt-1 text-xs font-medium text-foreground underline-offset-4 hover:underline"
+          onClick={() => setExpanded((current) => !current)}
+          type="button"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
     </div>
   );
 }

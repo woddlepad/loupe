@@ -41,6 +41,9 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "externally_connectable": {
+    "matches": ["http://127.0.0.1/*", "http://localhost/*"]
+  },
   "web_accessible_resources": [
     {
       "resources": ["fonts/*"],

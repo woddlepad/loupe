@@ -35,6 +35,16 @@ void chrome.storage.session
   ?.setAccessLevel?.({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" })
   .catch((e) => console.warn("[loupe] could not expose session storage to content scripts", e));
 
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  const url = sender.url ?? "";
+  const isLocalhost = url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:");
+  if (!isLocalhost || msg?.type !== "loupe-dev-reload") return false;
+
+  sendResponse({ ok: true });
+  setTimeout(() => chrome.runtime.reload(), 25);
+  return false;
+});
+
 /**
  * Send a toggle to the active tab's content script. If the content script isn't
  * there yet (e.g. the tab was open before the extension loaded), inject it on
@@ -426,9 +436,9 @@ function daemonHelp(bridgeUrl: string): string {
   return [
     `Loupe daemon is not running at ${bridgeUrl}.`,
     "",
-    "Install the Loupe CLI:",
-    "  npm install -g @woddlepad/loupe",
-    "  # or from a source checkout: pnpm install:cli",
+    "Install Loupe from the source checkout:",
+    "  cd /path/to/loupe",
+    "  pnpm install",
     "",
     "Then in your app repo:",
     "  loupe init",

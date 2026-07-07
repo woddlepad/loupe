@@ -80,6 +80,13 @@ button:not(:disabled),
     width: 100%;
   }
 
+  .dreamer-summary-clamp {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
   .markdown-body {
     @apply text-sm leading-7 text-foreground;
   }
@@ -155,4 +162,22 @@ button:not(:disabled),
   .dreamer-mermaid-error {
     @apply border-destructive/50 text-destructive;
   }
+
+  .dreamer-prototype-shell {
+    @apply relative h-full min-h-0 w-full overflow-hidden bg-white;
+  }
+
+  .dreamer-prototype-shell:fullscreen {
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .dreamer-prototype-frame {
+    @apply h-full w-full border-0 bg-white;
+  }
+
+  .dreamer-prototype-fullscreen-button {
+    @apply absolute right-3 top-3 z-10 shadow-lg transition-opacity;
+  }
+
 }

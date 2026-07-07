@@ -41,27 +41,41 @@ No more "screenshot → paste into chat → hope the agent finds the file."
 
 ## Getting Started
 
-Install the CLI and bridge from npm:
+Install from source:
 
 ```sh
-npm install -g @woddlepad/loupe
-loupe install-skill
+git clone https://github.com/woddlepad/loupe
+cd loupe
+pnpm install
 ```
 
-`loupe install-skill` installs the Codex `loupe` and `dream` skills plus the
-Claude Code `/loupe` and `/dream` slash commands, so agents know how to pick up
-saved annotations and create Dreamer plans. If npm returns `404` before the
-first public release, use the source build path below.
+`pnpm install` rebuilds Loupe, installs the `loupe` and `loupe-bridge` CLI
+shims, installs the Codex `loupe` and `dream` skills, installs the Claude Code
+`/loupe` and `/dream` slash commands, and prepares the Chrome extension from
+`packages/extension/dist`.
 
-Install the browser extension:
+Chrome requires one manual approval the first time a source-built unpacked
+extension is loaded:
 
-1. Open the Loupe listing in the Chrome Web Store.
-2. Click **Add to Chrome** and approve the extension permissions.
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked** and select `packages/extension/dist`.
 3. Pin Loupe in the browser toolbar if you want the popup close at hand.
 
+After that first load, future updates are just:
+
+```sh
+git pull
+pnpm install
+```
+
+The install hook rebuilds the extension and reloads it in Chrome automatically
+when it finds Loupe already loaded from `packages/extension/dist`. If Chrome is
+not available or the extension was loaded before the reload hook existed, the
+install remains successful and prints the manual reload step.
+
 The default bridge URL is `http://localhost:7337`, which is what the extension
-uses out of the box. If the Web Store listing is not live yet, use the latest
-release zip or build from source using the developer instructions below.
+uses out of the box.
 
 Initialize each target repo once:
 
@@ -205,18 +219,39 @@ All repo-specific knowledge lives in the daemon (which runs in your repo's cwd),
 so the extension stays generic enough to run on any site — including a teammate's
 deployed app.
 
-## Build From Source
+## Source Install
 
 ```sh
-git clone https://github.com/woddlepad/loupe && cd loupe
 pnpm install
-pnpm build:extension          # → packages/extension/dist
-pnpm install:cli              # → ~/.local/bin/loupe and loupe-bridge
-pnpm install:skill            # → ~/.codex/skills/loupe and ~/.claude/commands/loupe.md
 ```
 
-1. **Load the extension:** `chrome://extensions` → enable *Developer mode* →
-   *Load unpacked* → select `packages/extension/dist`.
+This is the main install path while the Chrome Web Store listing is unpublished.
+It runs `pnpm build`, installs local CLI shims, installs the Codex skills and
+Claude commands, and handles the Chrome extension setup.
+
+On macOS and Linux the CLI shims are written to `~/.local/bin`. On Windows they
+are written to `%LOCALAPPDATA%\Programs\Loupe\bin`. If that directory is not on
+`PATH`, the installer prints a warning.
+
+If you need to rerun the source setup without reinstalling dependencies:
+
+```sh
+pnpm install:source
+```
+
+If you need to skip the browser step on a headless machine:
+
+```sh
+LOUPE_SKIP_CHROME_INSTALL=1 pnpm install
+```
+
+CI skips the source install hook by default. Set
+`LOUPE_RUN_SOURCE_INSTALL_IN_CI=1` to force the local setup in CI, or
+`LOUPE_SKIP_SOURCE_INSTALL=1` to skip it explicitly anywhere.
+
+1. **First-time Chrome approval:** `chrome://extensions` → enable *Developer
+   mode* → *Load unpacked* → select `packages/extension/dist`. Future
+   `pnpm install` runs reload it automatically.
 2. **Initialize and start the daemon** from your target repo:
    ```sh
    cd ~/code/my-app
