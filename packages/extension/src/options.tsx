@@ -12,7 +12,7 @@ import {
   SelectValue,
   Textarea,
 } from "@loupe/ui";
-import type { BridgeRoute, CodexLaunchMode } from "./settings.js";
+import type { BridgeRoute, CodexLaunchMode, FreezeScope } from "./settings.js";
 import {
   bridgeRouteFromInput,
   bridgeUrlForUrl,
@@ -101,6 +101,8 @@ function App() {
   const [bridgeRoutes, setBridgeRoutes] = useState<BridgeRouteDraft[]>([]);
   const [author, setAuthor] = useState("");
   const [codexMode, setCodexMode] = useState<CodexLaunchMode>("background");
+  const [freezeScope, setFreezeScope] = useState<FreezeScope>("selection");
+  const [freezeByDefault, setFreezeByDefault] = useState(false);
   const [projectOriginsText, setProjectOriginsText] = useState("");
   const [daemon, setDaemon] = useState<DaemonState>({ text: "", connected: false });
   const [providers, setProviders] = useState<ProvidersState>({ kind: "message", text: "" });
@@ -223,6 +225,8 @@ function App() {
       setBridgeRoutes(routeDrafts);
       setAuthor(s.author);
       setCodexMode(s.codexLaunchMode);
+      setFreezeScope(s.freezeScope);
+      setFreezeByDefault(s.freezeByDefault);
       setProjectOriginsText(originsText);
       bridgeUrlRef.current = s.bridgeUrl;
       bridgeRoutesRef.current = routeDrafts;
@@ -295,6 +299,20 @@ function App() {
     setCodexMode(mode);
     await saveSettings({ codexLaunchMode: mode });
     await renderDaemonStatus();
+    flash("saved");
+  };
+
+  const onChangeFreezeScope = async (value: string): Promise<void> => {
+    const scope: FreezeScope = value === "screen" ? "screen" : "selection";
+    setFreezeScope(scope);
+    await saveSettings({ freezeScope: scope });
+    flash("saved");
+  };
+
+  const onToggleFreezeByDefault = async (): Promise<void> => {
+    const next = !freezeByDefault;
+    setFreezeByDefault(next);
+    await saveSettings({ freezeByDefault: next });
     flash("saved");
   };
 
@@ -471,6 +489,31 @@ function App() {
       </Select>
       <p className="text-loupe-faint text-[11px] mt-1.5">
         background runs Codex from the bridge; URL handler opens a visible Codex app thread.
+      </p>
+
+      <label htmlFor="freezeScope" className="block text-[12px] text-loupe-muted mb-1.5 mt-4">
+        Freeze overlay
+      </label>
+      <Select value={freezeScope} onValueChange={(v) => void onChangeFreezeScope(v)}>
+        <SelectTrigger id="freezeScope" className="w-full text-[13px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="selection">Selection only</SelectItem>
+          <SelectItem value="screen">Entire screen</SelectItem>
+        </SelectContent>
+      </Select>
+      <label className="flex items-center gap-2 text-loupe-fg cursor-pointer text-[13px] mt-2">
+        <Checkbox
+          checked={freezeByDefault}
+          aria-label="Freeze on the normal annotate shortcut"
+          onCheckedChange={() => void onToggleFreezeByDefault()}
+        />
+        <span>Freeze on the normal annotate shortcut</span>
+      </label>
+      <p className="text-loupe-faint text-[11px] mt-1.5">
+        freezes a screenshot behind the editor so an open popover or dialog stays put while you
+        write. when off, freeze only via the freeze shortcut.
       </p>
 
       <label className="block text-[12px] text-loupe-muted mb-1.5 mt-4">Providers</label>

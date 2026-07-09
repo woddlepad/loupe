@@ -10,6 +10,8 @@ export interface BridgeRoute {
 
 export type CodexLaunchMode = "background" | "url-handler";
 
+export type FreezeScope = "selection" | "screen";
+
 export interface LoupeSettings {
   /** Bridge daemon base URL. */
   bridgeUrl: string;
@@ -36,6 +38,10 @@ export interface LoupeSettings {
    * whose binary isn't installed; this is an additional per-user opt-out.
    */
   disabledProviders: string[];
+  /** What the freeze overlay covers: just the selection, or the whole viewport. */
+  freezeScope: FreezeScope;
+  /** Freeze on the normal annotate shortcut too, not only the freeze shortcut. */
+  freezeByDefault: boolean;
 }
 
 export const DEFAULT_SETTINGS: LoupeSettings = {
@@ -45,6 +51,8 @@ export const DEFAULT_SETTINGS: LoupeSettings = {
   bridgeRoutes: [],
   codexLaunchMode: "background",
   disabledProviders: [],
+  freezeScope: "selection",
+  freezeByDefault: true,
 };
 
 /** Drop actions the user has disabled in settings. `save` is never filtered. */

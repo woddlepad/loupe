@@ -8,8 +8,15 @@ import type { ActionDescriptor, Annotation, AnnotationTarget, Rect, RecordingCap
 export interface LoupeOverlayOptions {
   /** Called when the user picks an action. Returns when delivery is done. */
   onSubmit: (annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>) => void | Promise<void>;
-  /** Called once when the user finishes a click/drag selection. */
-  onSelectionCapture?: (selection: { rect: Rect; devicePixelRatio: number }) => void | Promise<void>;
+  /**
+   * Called once when the user finishes a click/drag selection. May resolve with
+   * a page screenshot data URL; the overlay then freezes it behind the editing
+   * panel so the capture survives the live page changing.
+   */
+  onSelectionCapture?: (selection: {
+    rect: Rect;
+    devicePixelRatio: number;
+  }) => void | string | null | Promise<void | string | null>;
   /** Actions to render as buttons (advertised by the bridge). */
   actions?: ActionDescriptor[];
   /** Existing group names, offered as autocomplete in the group field. */
@@ -37,6 +44,8 @@ export interface LoupeOverlayOptions {
   draft?: LoupeOverlayDraft | null;
   /** Frozen visible-tab image shown behind the selection surface. */
   frozenScreenshotUrl?: string | null;
+  /** Whether the frozen backdrop covers the whole viewport or just the selection. */
+  freezeScope?: "selection" | "screen";
   /** Called whenever the in-progress annotation draft changes; null clears it. */
   onDraftChange?: (draft: LoupeOverlayDraft | null) => void | Promise<void>;
   /** Called when the overlay is disabled (Esc, toggle, or after submit). */
@@ -157,8 +166,9 @@ export class LoupeOverlay {
       captureTarget: defaultCaptureTarget,
       draft: null,
       frozenScreenshotUrl: null,
-      onDraftChange: () => {},
-      onDisable: () => {},
+      freezeScope: "selection",
+      onDraftChange: () => { },
+      onDisable: () => { },
       onSelectionCapture: async () => undefined,
       recorder: null,
       ...options,
@@ -175,6 +185,18 @@ export class LoupeOverlay {
 
   setChromeVisible(visible: boolean): void {
     if (this.host) this.host.style.display = visible ? "" : "none";
+  }
+
+  setFrozenScreenshot(url: string | null): void {
+    this.opts.frozenScreenshotUrl = url;
+    if (!url) {
+      this.frozenScreenshotEl?.remove();
+      this.frozenScreenshotEl = null;
+      return;
+    }
+    if (this.phase === "off") return;
+    if (this.frozenScreenshotEl) this.frozenScreenshotEl.src = url;
+    else this.appendFrozenScreenshot();
   }
 
   get selection(): { rect: Rect; devicePixelRatio: number } {
@@ -275,6 +297,7 @@ export class LoupeOverlay {
 
   private arm(): void {
     this.phase = "armed";
+    this.setFrozenScreenshot(null);
     this.setInspectCursor(true);
     this.renderArmed();
   }
@@ -283,7 +306,6 @@ export class LoupeOverlay {
     this.moveHostTo(document.body);
     this.clearLayer();
     if (!this.root) return;
-    this.appendFrozenScreenshot();
     const layer = el("div", { class: C.layer });
     layer.style.pointerEvents = "none";
     const inspectBox = el("div", { class: C.inspectBox, "data-loupe-inspect-box": "" });
@@ -457,7 +479,6 @@ export class LoupeOverlay {
   private renderDragging(): void {
     this.clearLayer();
     if (!this.root) return;
-    this.appendFrozenScreenshot();
     const layer = el("div", { class: C.layer });
     layer.style.pointerEvents = "none";
     layer.append(el("div", { class: C.dim }));
@@ -484,6 +505,12 @@ export class LoupeOverlay {
       "user-select:none",
       "background:transparent",
     ].join(";");
+    if (this.opts.freezeScope !== "screen") {
+      const r = this.current;
+      const right = Math.max(0, window.innerWidth - (r.x + r.width));
+      const bottom = Math.max(0, window.innerHeight - (r.y + r.height));
+      img.style.clipPath = `inset(${Math.max(0, r.y)}px ${right}px ${bottom}px ${Math.max(0, r.x)}px)`;
+    }
     this.frozenScreenshotEl = img;
     this.root.append(img);
   }
@@ -512,8 +539,9 @@ export class LoupeOverlay {
     this.editNote = "";
     this.editGroup = this.opts.defaultGroup;
     this.reportDraft();
-    void this.opts.onSelectionCapture(this.selection);
-    void this.renderEditing(targetEl, ++this.renderNonce);
+    const nonce = ++this.renderNonce;
+    this.captureSelectionBackdrop(nonce);
+    void this.renderEditing(targetEl, nonce);
   }
 
   private enterEditingForElement(targetEl: Element): void {
@@ -525,8 +553,20 @@ export class LoupeOverlay {
     this.editNote = "";
     this.editGroup = this.opts.defaultGroup;
     this.reportDraft();
-    void this.opts.onSelectionCapture(this.selection);
-    void this.renderEditing(targetEl, ++this.renderNonce);
+    const nonce = ++this.renderNonce;
+    this.captureSelectionBackdrop(nonce);
+    void this.renderEditing(targetEl, nonce);
+  }
+
+  private captureSelectionBackdrop(nonce: number): void {
+    void Promise.resolve(this.opts.onSelectionCapture(this.selection))
+      .then((url) => {
+        if (nonce !== this.renderNonce || this.phase !== "editing") return;
+        if (typeof url === "string") this.setFrozenScreenshot(url);
+      })
+      .catch(() => {
+        // Best-effort: leave the live page visible if the capture fails.
+      });
   }
 
   // --- recording ---
@@ -751,6 +791,7 @@ export class LoupeOverlay {
     this.moveHostTo(document.body);
     this.clearLayer();
     if (!this.root) return;
+    this.appendFrozenScreenshot();
 
     const frameDoc = this.mountEditingFrame();
     if (!frameDoc) return;
