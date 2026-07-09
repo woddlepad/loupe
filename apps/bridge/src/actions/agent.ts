@@ -27,11 +27,20 @@ export function agentActions(config: BridgeConfig): Action[] {
       hint: agentHint(name, cmd),
       models: cmd.models,
       defaultModel: cmd.defaultModel,
+      speeds: cmd.speeds,
+      defaultSpeed: cmd.defaultSpeed,
       run: (ctx: ActionContext) =>
         cmd.mode === "session"
           ? sessionOutcome(name, ctx)
           : cmd.mode === "codex-app-server"
-            ? openCodexAppServer(name, cmd, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`, selectedModel(cmd, ctx.selectedModel))
+            ? openCodexAppServer(
+                name,
+                cmd,
+                ctx.config.repoRoot,
+                `/loupe ${ctx.annotation.id}`,
+                selectedModel(cmd, ctx.selectedModel),
+                selectedSpeed(cmd, ctx.selectedSettings?.speed),
+              )
             : cmd.mode === "codex-app"
               ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`, selectedModel(cmd, ctx.selectedModel))
               : runAgent(name, cmd, ctx),
@@ -86,6 +95,7 @@ function runAgent(name: string, cmd: AgentCommand, ctx: ActionContext): ActionOu
     images,
     join(ctx.bundle.absDir, `agent-${name}.log`),
     selectedModel(cmd, ctx.selectedModel),
+    selectedSpeed(cmd, ctx.selectedSettings?.speed),
   );
 }
 
@@ -98,12 +108,14 @@ export function runAgentGroup(
   annotations: StoredAnnotation[],
   groupLogPath: string,
   model?: string,
+  speed?: string,
 ): ActionOutcome | Promise<ActionOutcome> {
   const chosenModel = selectedModel(cmd, model);
-  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, `/loupe ${group}`, chosenModel);
+  const chosenSpeed = selectedSpeed(cmd, speed);
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, `/loupe ${group}`, chosenModel, chosenSpeed);
   if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, `/loupe ${group}`, chosenModel);
   const prompt = buildGroupPrompt(name, group, annotations);
-  return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath, chosenModel);
+  return spawnAgent(name, cmd, config.repoRoot, prompt, `/loupe ${group}`, undefined, [], groupLogPath, chosenModel, chosenSpeed);
 }
 
 /** Run one configured bridge agent against a saved Dreamer implementation plan. */
@@ -114,8 +126,10 @@ export function runDreamAgent(
   dream: DreamDetail,
   logPath: string,
   model?: string,
+  speed?: string,
 ): ActionOutcome | Promise<ActionOutcome> {
   const chosenModel = selectedModel(cmd, model);
+  const chosenSpeed = selectedSpeed(cmd, speed);
   const launchPrompt = buildDreamLaunchPrompt(dream);
   if (cmd.mode === "session") {
     return {
@@ -123,9 +137,9 @@ export function runDreamAgent(
       detail: `saved dream ${dream.id} — pick it up in your open ${name} session`,
     };
   }
-  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, launchPrompt, chosenModel);
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, launchPrompt, chosenModel, chosenSpeed);
   if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, launchPrompt, chosenModel);
-  return spawnAgent(name, cmd, config.repoRoot, launchPrompt, launchPrompt, undefined, [], logPath, chosenModel);
+  return spawnAgent(name, cmd, config.repoRoot, launchPrompt, launchPrompt, undefined, [], logPath, chosenModel, chosenSpeed);
 }
 
 export function buildDreamLaunchPrompt(dream: DreamDetail): string {
@@ -178,6 +192,7 @@ async function openCodexAppServer(
   repoRoot: string,
   loupeCommand: string,
   model?: string,
+  speed?: string,
 ): Promise<ActionOutcome> {
   const socketPath = cmd.socketPath ?? defaultCodexAppServerSocketPath();
   if (!existsSync(socketPath)) {
@@ -209,6 +224,7 @@ async function openCodexAppServer(
     await client.call("turn/start", {
       threadId,
       cwd: repoRoot,
+      ...(speed ? { serviceTier: speed } : {}),
       input: [{ type: "text", text: loupeCommand, textElements: [] }],
     });
 
@@ -230,9 +246,10 @@ function spawnAgent(
   images: string[],
   logPath: string,
   model?: string,
+  speed?: string,
 ): ActionOutcome {
   if (!cmd.argv?.length) return { ok: false, detail: `${name}: no argv configured` };
-  const argv = expandAgentArgv(cmd, prompt, loupeCommand, bundle, images, cwd, model);
+  const argv = expandAgentArgv(cmd, prompt, loupeCommand, bundle, images, cwd, model, speed);
   if (!commandAvailable(argv[0]!)) {
     return { ok: false, detail: `${name}: command not found (${argv[0]})` };
   }
@@ -255,8 +272,9 @@ export function expandAgentArgv(
   images: string[],
   repoRoot = process.cwd(),
   model?: string,
+  speed?: string,
 ): string[] {
-  const argv = model ? withModelArgv(cmd, model) : (cmd.argv ?? []);
+  const argv = withSpeedArgv(cmd, speed, model ? withModelArgv(cmd, model) : (cmd.argv ?? []));
   return argv.flatMap((a) => {
     // {imageArgs} expands to `-i path1,path2` (Codex) or nothing when no images.
     if (a === "{imageArgs}") return images.length ? ["-i", images.join(",")] : [];
@@ -295,11 +313,29 @@ function selectedModel(cmd: AgentCommand, model: string | undefined): string | u
   return cmd.models.some((option) => option.id === chosen) ? chosen : cmd.defaultModel;
 }
 
+function selectedSpeed(cmd: AgentCommand, speed: string | undefined): string | undefined {
+  const chosen = speed?.trim() || cmd.defaultSpeed?.trim();
+  if (!chosen || chosen === "default") return undefined;
+  if (!cmd.speeds?.length) return chosen;
+  return cmd.speeds.some((option) => option.id === chosen) ? chosen : undefined;
+}
+
 function withModelArgv(cmd: AgentCommand, model: string): string[] {
   const argv = cmd.argv ?? [];
   if (!argv.length) return argv;
   const modelArgv = (cmd.modelArgv ?? ["--model", "{model}"]).map((arg) => arg.replaceAll("{model}", model));
   return [argv[0]!, ...modelArgv, ...argv.slice(1)];
+}
+
+function withSpeedArgv(cmd: AgentCommand, speed: string | undefined, argv: string[]): string[] {
+  if (!speed || !argv.length) return argv;
+  const speedArgv = (cmd.speedArgv ?? defaultSpeedArgv(speed)).map((arg) => arg.replaceAll("{speed}", speed));
+  return speedArgv.length ? [argv[0]!, ...speedArgv, ...argv.slice(1)] : argv;
+}
+
+function defaultSpeedArgv(speed: string): string[] {
+  if (speed === "fast") return ["--config", 'service_tier="fast"', "--config", "features.fast_mode=true"];
+  return [];
 }
 
 function openerArgv(url: string): string[] {

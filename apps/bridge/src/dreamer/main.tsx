@@ -84,12 +84,24 @@ interface ActionDescriptor {
   hint?: string;
   models?: ActionModelOption[];
   defaultModel?: string;
+  speeds?: ActionSpeedOption[];
+  defaultSpeed?: string;
 }
 
 interface ActionModelOption {
   id: string;
   label: string;
   hint?: string;
+}
+
+interface ActionSpeedOption {
+  id: string;
+  label: string;
+  hint?: string;
+}
+
+interface ActionRunSettings {
+  speed?: string;
 }
 
 type Mode = "plans" | "reports";
@@ -137,6 +149,7 @@ const PLAN_SORT_OPTIONS: { label: string; value: PlanSort }[] = [
 
 const KNOWN_AGENT_IDS = new Set(["claude", "codex", "copilot", "pi"]);
 const MODEL_SELECTIONS_STORAGE_KEY = "loupe:agent-model-selections";
+const SETTINGS_SELECTIONS_STORAGE_KEY = "loupe:agent-settings-selections";
 const MERMAID_LANGUAGE_CLASS = /\blanguage-mermaid\b/;
 
 const EMPTY_MARKDOWN = `## Background
@@ -182,6 +195,7 @@ function App() {
   const [launchState, setLaunchState] = React.useState<LaunchState>({ kind: "idle" });
   const [launchingAction, setLaunchingAction] = React.useState<string | null>(null);
   const [selectedModels, setSelectedModels] = React.useState<Record<string, string>>(() => readStoredModelSelections());
+  const [selectedSettings, setSelectedSettings] = React.useState<Record<string, ActionRunSettings>>(() => readStoredSettingsSelections());
   const [autosaveState, setAutosaveState] = React.useState<AutosaveState>({ kind: "clean" });
   const [loading, setLoading] = React.useState(true);
 
@@ -267,6 +281,7 @@ function App() {
       setPlans(nextPlans);
       setActions(nextActions);
       setSelectedModels((current) => defaultModels(nextActions, current));
+      setSelectedSettings((current) => defaultSettings(nextActions, current));
       setSelectedPlanId((current) => current || nextPlans[0]?.id || "");
       setSelectedReportId((current) => current || nextPlans.find((plan) => plan.files.report || plan.files.images.length)?.id || "");
     } finally {
@@ -374,7 +389,7 @@ function App() {
     setLaunchState({ kind: "ok", message: "Launch state reset" });
   }
 
-  async function launch(agent: ActionDescriptor, model?: string) {
+  async function launch(agent: ActionDescriptor, model?: string, settings?: ActionRunSettings) {
     if (!selectedPlan) return;
     if (selectedPlan.status === "running") {
       setLaunchState({ kind: "error", message: "This dream is already running." });
@@ -386,7 +401,7 @@ function App() {
       const response = await fetch(apiUrl(`/dreams/${encodeURIComponent(selectedPlan.id)}/run`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: agent.id, model }),
+        body: JSON.stringify({ action: agent.id, model, speed: settings?.speed }),
       });
       const result = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -418,6 +433,14 @@ function App() {
     setSelectedModels((current) => {
       const next = defaultModels(actions, { ...current, [actionId]: model });
       writeStoredModelSelections(next);
+      return next;
+    });
+  }
+
+  function chooseSpeed(actionId: string, speed: string) {
+    setSelectedSettings((current) => {
+      const next = defaultSettings(actions, { ...current, [actionId]: { ...current[actionId], speed } });
+      writeStoredSettingsSelections(next);
       return next;
     });
   }
@@ -572,9 +595,11 @@ function App() {
                                 disabled={Boolean(draft) || Boolean(launchingAction) || selectedPlan?.status === "running"}
                                 key={agent.id}
                                 launching={launchingAction === agent.id}
-                                onLaunch={(model) => void launch(agent, model)}
+                                onLaunch={(model, settings) => void launch(agent, model, settings)}
                                 onModelChange={(model) => chooseModel(agent.id, model)}
+                                onSpeedChange={(speed) => chooseSpeed(agent.id, speed)}
                                 selectedModel={selectedModels[agent.id] ?? agent.defaultModel ?? agent.models?.[0]?.id}
+                                selectedSettings={selectedSettings[agent.id]}
                               />
                             ))}
                           </div>
@@ -1302,16 +1327,21 @@ function AgentLaunchButton({
   launching,
   onLaunch,
   onModelChange,
+  onSpeedChange,
   selectedModel,
+  selectedSettings,
 }: {
   action: ActionDescriptor;
   disabled?: boolean;
   launching?: boolean;
-  onLaunch: (model?: string) => void;
+  onLaunch: (model?: string, settings?: ActionRunSettings) => void;
   onModelChange: (model: string) => void;
+  onSpeedChange: (speed: string) => void;
   selectedModel?: string;
+  selectedSettings?: ActionRunSettings;
 }) {
   const selected = action.models?.find((model) => model.id === selectedModel) ?? action.models?.[0];
+  const selectedSpeed = action.speeds?.find((speed) => speed.id === selectedSettings?.speed) ?? action.speeds?.[0];
   if (!action.models?.length) {
     return (
       <Button
@@ -1335,7 +1365,7 @@ function AgentLaunchButton({
         className="h-10 min-w-0 basis-[42%] justify-start gap-2 px-3"
         disabled={disabled}
         loading={launching}
-        onClick={() => onLaunch(selected?.id)}
+        onClick={() => onLaunch(selected?.id, selectedSpeed ? { speed: selectedSpeed.id } : undefined)}
         title={selected ? `${action.label} with ${selected.label}` : action.hint}
         type="button"
         variant="outline"
@@ -1369,6 +1399,34 @@ function AgentLaunchButton({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      {action.speeds?.length ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label={`Choose ${action.label} speed`}
+              className="h-10 min-w-0 flex-[0.72_1_0] justify-between gap-2 px-3"
+              disabled={disabled || Boolean(launching)}
+              title={`Choose ${action.label} speed`}
+              type="button"
+              variant="outline"
+            >
+              <span className="truncate text-sm">{selectedSpeed?.label ?? "Speed"}</span>
+              <ChevronDown className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            {action.speeds.map((speed) => (
+              <DropdownMenuItem className="items-start" key={speed.id} onSelect={() => onSpeedChange(speed.id)}>
+                <Check className={cn("mt-0.5 size-4", speed.id === selectedSpeed?.id ? "opacity-100" : "opacity-0")} />
+                <span className="min-w-0">
+                  <span className="block truncate">{speed.label}</span>
+                  {speed.hint ? <span className="block truncate text-xs text-muted-foreground">{speed.hint}</span> : null}
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
     </ButtonGroup>
   );
 }
@@ -1560,9 +1618,24 @@ function defaultModels(actions: ActionDescriptor[], current: Record<string, stri
   );
 }
 
+function defaultSettings(actions: ActionDescriptor[], current: Record<string, ActionRunSettings>): Record<string, ActionRunSettings> {
+  return Object.fromEntries(
+    actions
+      .flatMap((action): [string, ActionRunSettings][] => {
+        const speed = validSpeedId(action, current[action.id]?.speed) ?? action.defaultSpeed ?? action.speeds?.[0]?.id;
+        return speed ? [[action.id, { speed }]] : [];
+      }),
+  );
+}
+
 function validModelId(action: ActionDescriptor, model: string | undefined): string | undefined {
   if (!model || !action.models?.length) return undefined;
   return action.models.some((option) => option.id === model) ? model : undefined;
+}
+
+function validSpeedId(action: ActionDescriptor, speed: string | undefined): string | undefined {
+  if (!speed || !action.speeds?.length) return undefined;
+  return action.speeds.some((option) => option.id === speed) ? speed : undefined;
 }
 
 function readStoredModelSelections(): Record<string, string> {
@@ -1580,10 +1653,39 @@ function readStoredModelSelections(): Record<string, string> {
   }
 }
 
+function readStoredSettingsSelections(): Record<string, ActionRunSettings> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_SELECTIONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .flatMap(([action, settings]): [string, ActionRunSettings][] => {
+          if (!settings || typeof settings !== "object") return [];
+          const speed = (settings as { speed?: unknown }).speed;
+          return typeof speed === "string" ? [[action, { speed }]] : [];
+        }),
+    );
+  } catch {
+    return {};
+  }
+}
+
 function writeStoredModelSelections(models: Record<string, string>): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(MODEL_SELECTIONS_STORAGE_KEY, JSON.stringify(models));
+  } catch {
+    // Storage can be unavailable in restrictive browser modes; the in-memory selection still works.
+  }
+}
+
+function writeStoredSettingsSelections(settings: Record<string, ActionRunSettings>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SETTINGS_SELECTIONS_STORAGE_KEY, JSON.stringify(settings));
   } catch {
     // Storage can be unavailable in restrictive browser modes; the in-memory selection still works.
   }

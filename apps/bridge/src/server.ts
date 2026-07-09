@@ -445,7 +445,7 @@ async function handleAnnotate(
   registry: ActionRegistry,
   payload: AnnotatePayload,
 ) {
-  const { annotation, actions, actionModels } = payload;
+  const { annotation, actions, actionModels, actionSettings } = payload;
   if (!annotation?.id) throw new Error("missing annotation");
 
   // Always write the committable bundle first, then run the chosen actions.
@@ -460,7 +460,14 @@ async function handleAnnotate(
       continue;
     }
     try {
-      results[id] = await action.run({ annotation, bundle, resolution, config, selectedModel: actionModels?.[id] });
+      results[id] = await action.run({
+        annotation,
+        bundle,
+        resolution,
+        config,
+        selectedModel: actionModels?.[id],
+        selectedSettings: actionSettings?.[id],
+      });
     } catch (e) {
       results[id] = { ok: false, detail: String(e) };
     }
@@ -490,7 +497,7 @@ async function handleRecord(
   registry: ActionRegistry,
   payload: AnnotatePayload,
 ) {
-  const { annotation, actions, actionModels } = payload;
+  const { annotation, actions, actionModels, actionSettings } = payload;
   if (!annotation?.id) throw new Error("missing annotation");
   if (annotation.kind !== "recording" || !annotation.recording) throw new Error("missing recording payload");
 
@@ -506,7 +513,14 @@ async function handleRecord(
       continue;
     }
     try {
-      results[id] = await action.run({ annotation, bundle, resolution, config, selectedModel: actionModels?.[id] });
+      results[id] = await action.run({
+        annotation,
+        bundle,
+        resolution,
+        config,
+        selectedModel: actionModels?.[id],
+        selectedSettings: actionSettings?.[id],
+      });
     } catch (e) {
       results[id] = { ok: false, detail: String(e) };
     }
@@ -563,7 +577,7 @@ function handleWriteDream(config: BridgeConfig, body: DreamWriteInput) {
 async function handleDreamRun(
   config: BridgeConfig,
   id: string,
-  body: { action?: string; model?: string },
+  body: { action?: string; model?: string; speed?: string },
 ): Promise<{ ok: boolean; action: string; detail?: string; dream?: unknown; url?: string }> {
   const action = body.action?.trim();
   if (!action) throw new Error("missing action");
@@ -576,7 +590,7 @@ async function handleDreamRun(
   }
 
   const logPath = resolve(config.repoRoot, dream.dir, `agent-${action}.log`);
-  const outcome = await runDreamAgent(action, cmd, config, dream, logPath, body.model);
+  const outcome = await runDreamAgent(action, cmd, config, dream, logPath, body.model, body.speed);
   console.log(`[loupe] dream "${id}" → ${action}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
   if (!outcome.ok) return { ok: false, action, detail: outcome.detail, url: outcome.url };
 
@@ -692,7 +706,7 @@ async function handleAnnotationRun(
   resolver: Resolver,
   registry: ActionRegistry,
   id: string,
-  body: { action: string; model?: string },
+  body: { action: string; model?: string; speed?: string },
 ) {
   const actionId = body.action?.trim();
   if (!actionId) throw new Error("missing action");
@@ -703,7 +717,14 @@ async function handleAnnotationRun(
 
   const bundle = bundleFromStoredAnnotation(config.repoRoot, annotation);
   const resolution = (annotation as StoredAnnotation & { resolution?: SourceResolution }).resolution ?? resolver.resolve(annotation.target);
-  const outcome = await action.run({ annotation, bundle, resolution, config, selectedModel: body.model });
+  const outcome = await action.run({
+    annotation,
+    bundle,
+    resolution,
+    config,
+    selectedModel: body.model,
+    selectedSettings: body.speed ? { speed: body.speed } : undefined,
+  });
   console.log(`[loupe] annotation "${id}" → ${actionId}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
   return { ok: outcome.ok, action: actionId, count: 1, detail: outcome.detail, url: outcome.url };
 }
@@ -747,7 +768,7 @@ async function handleGroupRun(
   config: BridgeConfig,
   registry: ActionRegistry,
   slug: string,
-  body: { action: string; model?: string },
+  body: { action: string; model?: string; speed?: string },
 ) {
   const items = listAnnotations(config.repoRoot).filter((a) => a.groupSlug === slug);
   if (items.length === 0) throw new Error(`group "${slug}" has no annotations`);
@@ -765,7 +786,7 @@ async function handleGroupRun(
       };
     }
     const logPath = resolve(config.repoRoot, ".loupe/annotations", slug, `agent-${body.action}.log`);
-    const outcome = await runAgentGroup(body.action, agentCmd, config, groupName, items, logPath, body.model);
+    const outcome = await runAgentGroup(body.action, agentCmd, config, groupName, items, logPath, body.model, body.speed);
     console.log(`[loupe] group "${slug}" → ${body.action} (${items.length} items): ${outcome.detail}`);
     return { ok: outcome.ok, action: body.action, count: items.length, detail: outcome.detail };
   }

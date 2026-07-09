@@ -3,11 +3,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { captureTarget as defaultCaptureTarget, dominantElement, rectOf } from "./capture.js";
 import { editPanelElement, type LoupeEditPanelProps } from "./edit-panel.js";
 import { C, GITHUB_LOGO_SVG, GITHUB_REPO_URL } from "./overlay-classes.js";
-import type { ActionDescriptor, Annotation, AnnotationTarget, Rect, RecordingCapture } from "./model.js";
+import type { ActionDescriptor, ActionRunSettings, Annotation, AnnotationTarget, Rect, RecordingCapture } from "./model.js";
 
 export interface LoupeOverlayOptions {
   /** Called when the user picks an action. Returns when delivery is done. */
-  onSubmit: (annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>) => void | Promise<void>;
+  onSubmit: (
+    annotation: Annotation,
+    actionIds: string[],
+    actionModels?: Record<string, string>,
+    actionSettings?: Record<string, ActionRunSettings>,
+  ) => void | Promise<void>;
   /**
    * Called once when the user finishes a click/drag selection. May resolve with
    * a page screenshot data URL; the overlay then freezes it behind the editing
@@ -880,7 +885,7 @@ export class LoupeOverlay {
       actions: cfg.actions,
       defaultActionId: cfg.defaultActionId,
       submittingActionId: this.editSubmitting,
-      onSubmit: (actionId, model) => this.editSubmitAction(actionId, model),
+      onSubmit: (actionId, model, settings) => this.editSubmitAction(actionId, model, settings),
       error: this.editError,
       onClose: cfg.onClose,
       panelRef: this.handlePanelRef,
@@ -900,7 +905,7 @@ export class LoupeOverlay {
   };
 
   /** Send the annotation for one action, disabling the panel + surfacing errors. */
-  private async editSubmitAction(actionId: string, model?: string): Promise<void> {
+  private async editSubmitAction(actionId: string, model?: string, settings?: ActionRunSettings): Promise<void> {
     if (this.editSubmitting || !this.editConfig) return;
     this.editSubmitting = actionId;
     this.editError = null;
@@ -908,7 +913,12 @@ export class LoupeOverlay {
     const annotation = this.editConfig.buildAnnotation();
     const isRecording = this.editConfig.variant === "recording";
     try {
-      await this.opts.onSubmit(annotation, [actionId], model ? { [actionId]: model } : undefined);
+      await this.opts.onSubmit(
+        annotation,
+        [actionId],
+        model ? { [actionId]: model } : undefined,
+        settings ? { [actionId]: settings } : undefined,
+      );
       this.disable();
     } catch (err) {
       this.editSubmitting = null;

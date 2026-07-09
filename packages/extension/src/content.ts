@@ -2,6 +2,7 @@ import {
   captureTarget,
   LoupeOverlay,
   type ActionDescriptor,
+  type ActionRunSettings,
   type Annotation,
   type AnnotationTarget,
   type ComponentRef,
@@ -155,13 +156,18 @@ function toggleView(): void {
   viewer.toggle();
 }
 
-async function handleSubmit(annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>): Promise<void> {
+async function handleSubmit(
+  annotation: Annotation,
+  actionIds: string[],
+  actionModels?: Record<string, string>,
+  actionSettings?: Record<string, ActionRunSettings>,
+): Promise<void> {
   if (actionIds.includes("copy-prompt")) {
     const detail = await copyAnnotationClipboard(annotation);
     toast(detail);
     return;
   }
-  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds, actionModels);
+  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds, actionModels, actionSettings);
   if (frozenScreenshotDataUrl) {
     annotation.screenshotDataUrl = await cropFrozenScreenshot(frozenScreenshotDataUrl, annotation.rect);
   } else {
@@ -194,7 +200,7 @@ async function handleSubmit(annotation: Annotation, actionIds: string[], actionM
   await chrome.storage.local.set({ lastGroup: annotation.group ?? "" });
   const res = (await chrome.runtime.sendMessage({
     type: "annotate",
-    payload: { annotation, actions: actionsWithSave(actionIds), actionModels },
+    payload: { annotation, actions: actionsWithSave(actionIds), actionModels, actionSettings },
   } satisfies LoupeMessage)) as AnnotateResult;
   if (!res.ok) throw new Error(res.error);
   const ran = Object.entries(res.results)
@@ -203,10 +209,15 @@ async function handleSubmit(annotation: Annotation, actionIds: string[], actionM
   toast(`${annotation.group ? `[${annotation.group}] ` : ""}saved → ${res.dir}${ran ? `\n${ran}` : ""}${clipboardDetail ? `\n${clipboardDetail}` : ""}`);
 }
 
-async function handleRecordingSubmit(annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>): Promise<void> {
+async function handleRecordingSubmit(
+  annotation: Annotation,
+  actionIds: string[],
+  actionModels?: Record<string, string>,
+  actionSettings?: Record<string, ActionRunSettings>,
+): Promise<void> {
   const res = (await chrome.runtime.sendMessage({
     type: "record",
-    payload: { annotation, actions: actionsWithSave(actionIds), actionModels },
+    payload: { annotation, actions: actionsWithSave(actionIds), actionModels, actionSettings },
   } satisfies LoupeMessage)) as AnnotateResult;
   if (!res.ok) throw new Error(res.error);
   const ran = Object.entries(res.results)

@@ -47,6 +47,8 @@ export class ActionRegistry {
       hint: a.hint,
       models: a.models,
       defaultModel: a.defaultModel,
+      speeds: a.speeds,
+      defaultSpeed: a.defaultSpeed,
     }));
   }
 }

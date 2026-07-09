@@ -157,7 +157,11 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
       return true;
     case "group-run":
-      bridgePost(`/groups/${encodeURIComponent(msg.slug)}/run`, { action: msg.action, model: msg.model }, senderUrl(sender))
+      bridgePost(
+        `/groups/${encodeURIComponent(msg.slug)}/run`,
+        { action: msg.action, model: msg.model, speed: msg.speed },
+        senderUrl(sender),
+      )
         .then((b) => sendResponse({ ok: true, detail: b.detail } satisfies SimpleResult))
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
       return true;
@@ -167,7 +171,11 @@ chrome.runtime.onMessage.addListener((msg: LoupeMessage, sender, sendResponse) =
         .catch((e) => sendResponse({ ok: false, error: String(e) } satisfies SimpleResult));
       return true;
     case "annotation-run":
-      bridgePost(`/annotations/${encodeURIComponent(msg.id)}/run`, { action: msg.action, model: msg.model }, senderUrl(sender))
+      bridgePost(
+        `/annotations/${encodeURIComponent(msg.id)}/run`,
+        { action: msg.action, model: msg.model, speed: msg.speed },
+        senderUrl(sender),
+      )
         .then((b) =>
           sendResponse(
             b.ok
