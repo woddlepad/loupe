@@ -40,9 +40,25 @@ test("expands selected models into agent argv", () => {
       undefined,
       [],
       process.cwd(),
-      "gpt-5.5",
+      "gpt-5.6",
     ),
-    ["codex", "--model", "gpt-5.5", "exec", "/loupe notes"],
+    ["codex", "--model", "gpt-5.6", "exec", "/loupe notes"],
+  );
+});
+
+test("expands selected speed into Codex config argv", () => {
+  assert.deepEqual(
+    expandAgentArgv(
+      { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"] },
+      "inline prompt",
+      "/loupe notes",
+      undefined,
+      [],
+      process.cwd(),
+      "gpt-5.6",
+      "fast",
+    ),
+    ["codex", "--config", 'service_tier="fast"', "--config", "features.fast_mode=true", "--model", "gpt-5.6", "exec", "/loupe notes"],
   );
 });
 
@@ -71,12 +87,14 @@ test("defaults Codex to background local exec", () => {
   try {
     const codex = defaultAgents().codex;
     assert.deepEqual(codex?.argv, ["codex", "exec", "{loupeCommand}"]);
-    assert.equal(codex?.defaultModel, "gpt-5.5");
+    assert.equal(codex?.defaultModel, "gpt-5.6");
     assert.deepEqual(expandAgentArgv(codexBackgroundAgent(), "inline prompt", "/loupe notes", undefined, []), [
       "codex",
       "exec",
       "/loupe notes",
     ]);
+    assert.deepEqual(codex?.models?.slice(0, 4).map((model) => model.id), ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    assert.deepEqual(codex?.speeds?.map((speed) => speed.id), ["default", "fast"]);
   } finally {
     restoreEnv("LOUPE_CODEX_CLOUD_ENV", previousCloud);
     restoreEnv("CODEX_CLOUD_ENV", previousCodeCloud);

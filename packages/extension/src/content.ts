@@ -2,6 +2,7 @@ import {
   captureTarget,
   LoupeOverlay,
   type ActionDescriptor,
+  type ActionRunSettings,
   type Annotation,
   type AnnotationTarget,
   type ComponentRef,
@@ -50,24 +51,26 @@ let mode: "annotate" | "reference" = "annotate";
 let bridgeUrl = "http://localhost:7337";
 let activeRepoRoot = "";
 let frozenScreenshotDataUrl: string | null = null;
+let freezeBackdrop = false;
 const DRAFT_STORAGE_PREFIX = "loupeDraft:";
 const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 async function toggleAnnotate(): Promise<void> {
-  await toggleAnnotateMode(false);
+  await toggleAnnotateMode(undefined);
 }
 
 async function toggleFrozenAnnotate(): Promise<void> {
   await toggleAnnotateMode(true);
 }
 
-async function toggleAnnotateMode(frozen: boolean): Promise<void> {
+// forceFreeze overrides the freezeByDefault setting (used by the freeze shortcut).
+async function toggleAnnotateMode(forceFreeze: boolean | undefined): Promise<void> {
   viewer?.close();
   if (overlay?.active) {
     overlay.disable();
     return;
   }
-  await startAnnotating(await loadDraft(), { frozen });
+  await startAnnotating(await loadDraft(), { freeze: forceFreeze });
 }
 
 /**
@@ -84,7 +87,7 @@ function handleViewerMode(nextMode: LoupeMode): void {
 }
 
 async function enterAnnotateFromViewer(): Promise<void> {
-  if (!overlay?.active) await startAnnotating(await loadDraft(), { frozen: false });
+  if (!overlay?.active) await startAnnotating(await loadDraft());
   viewer?.bringToFront();
 }
 
@@ -92,17 +95,13 @@ async function enterAnnotateFromViewer(): Promise<void> {
 function handleOverlayDisabled(): void {
   viewer?.setMode("select");
   frozenScreenshotDataUrl = null;
+  freezeBackdrop = false;
 }
 
-async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: { frozen?: boolean } = {}): Promise<void> {
-  const frozenCapture = options.frozen
-    ? captureVisiblePage().catch((e) => {
-        console.warn("[loupe] frozen screenshot capture failed", e);
-        return null;
-      })
-    : Promise.resolve(null);
+async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: { freeze?: boolean } = {}): Promise<void> {
   const settings = await loadSettings();
-  frozenScreenshotDataUrl = await frozenCapture;
+  freezeBackdrop = options.freeze ?? settings.freezeByDefault;
+  frozenScreenshotDataUrl = null;
   bridgeUrl = bridgeUrlForUrl(settings, location.href);
   activeRepoRoot = settings.activeRepoRoot ?? "";
   const routedOrigins = settings.bridgeRoutes.flatMap((route) => route.origins);
@@ -113,9 +112,9 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: 
     overlay = new LoupeOverlay({
       mode: "reference",
       stylesheet: overlayCss,
-      frozenScreenshotUrl: frozenScreenshotDataUrl,
+      freezeScope: settings.freezeScope,
       generateId: newId,
-      onSelectionCapture: copySelectionScreenshotToClipboard,
+      onSelectionCapture: captureSelectionForEditing,
       draft: restoreDraft,
       onDraftChange: saveDraft,
       onSubmit: handleSubmit,
@@ -136,10 +135,10 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: 
       library,
       resolveLibraryImage,
       stylesheet: overlayCss,
-      frozenScreenshotUrl: frozenScreenshotDataUrl,
+      freezeScope: settings.freezeScope,
       generateId: newId,
       captureTarget: captureTargetWithPageFrameworks,
-      onSelectionCapture: copySelectionScreenshotToClipboard,
+      onSelectionCapture: captureSelectionForEditing,
       draft: restoreDraft,
       onDraftChange: saveDraft,
       onSubmit: handleSubmit,
@@ -157,13 +156,18 @@ function toggleView(): void {
   viewer.toggle();
 }
 
-async function handleSubmit(annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>): Promise<void> {
+async function handleSubmit(
+  annotation: Annotation,
+  actionIds: string[],
+  actionModels?: Record<string, string>,
+  actionSettings?: Record<string, ActionRunSettings>,
+): Promise<void> {
   if (actionIds.includes("copy-prompt")) {
     const detail = await copyAnnotationClipboard(annotation);
     toast(detail);
     return;
   }
-  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds, actionModels);
+  if (annotation.kind === "recording") return handleRecordingSubmit(annotation, actionIds, actionModels, actionSettings);
   if (frozenScreenshotDataUrl) {
     annotation.screenshotDataUrl = await cropFrozenScreenshot(frozenScreenshotDataUrl, annotation.rect);
   } else {
@@ -196,7 +200,7 @@ async function handleSubmit(annotation: Annotation, actionIds: string[], actionM
   await chrome.storage.local.set({ lastGroup: annotation.group ?? "" });
   const res = (await chrome.runtime.sendMessage({
     type: "annotate",
-    payload: { annotation, actions: actionsWithSave(actionIds), actionModels },
+    payload: { annotation, actions: actionsWithSave(actionIds), actionModels, actionSettings },
   } satisfies LoupeMessage)) as AnnotateResult;
   if (!res.ok) throw new Error(res.error);
   const ran = Object.entries(res.results)
@@ -205,10 +209,15 @@ async function handleSubmit(annotation: Annotation, actionIds: string[], actionM
   toast(`${annotation.group ? `[${annotation.group}] ` : ""}saved → ${res.dir}${ran ? `\n${ran}` : ""}${clipboardDetail ? `\n${clipboardDetail}` : ""}`);
 }
 
-async function handleRecordingSubmit(annotation: Annotation, actionIds: string[], actionModels?: Record<string, string>): Promise<void> {
+async function handleRecordingSubmit(
+  annotation: Annotation,
+  actionIds: string[],
+  actionModels?: Record<string, string>,
+  actionSettings?: Record<string, ActionRunSettings>,
+): Promise<void> {
   const res = (await chrome.runtime.sendMessage({
     type: "record",
-    payload: { annotation, actions: actionsWithSave(actionIds), actionModels },
+    payload: { annotation, actions: actionsWithSave(actionIds), actionModels, actionSettings },
   } satisfies LoupeMessage)) as AnnotateResult;
   if (!res.ok) throw new Error(res.error);
   const ran = Object.entries(res.results)
@@ -778,12 +787,6 @@ function nextFrame(): Promise<void> {
   return new Promise((r) => requestAnimationFrame(() => r()));
 }
 
-async function captureVisiblePage(): Promise<string> {
-  const shot = (await chrome.runtime.sendMessage({ type: "capture-visible" } satisfies LoupeMessage)) as CaptureResult;
-  if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
-  return shot.dataUrl;
-}
-
 async function cropFrozenScreenshot(dataUrl: string, rect: Annotation["rect"]): Promise<string> {
   const blob = await (await fetch(dataUrl)).blob();
   const bitmap = await createImageBitmap(blob);
@@ -831,27 +834,33 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
-async function copySelectionScreenshotToClipboard(selection: { rect: Annotation["rect"]; devicePixelRatio: number }): Promise<void> {
+async function captureSelectionForEditing(
+  selection: { rect: Annotation["rect"]; devicePixelRatio: number },
+): Promise<string | null> {
   const activeOverlay = overlay;
   try {
-    if (frozenScreenshotDataUrl) {
-      await writeScreenshotToClipboard(await cropFrozenScreenshot(frozenScreenshotDataUrl, selection.rect));
-      return;
-    }
     activeOverlay?.setChromeVisible(false);
     await nextFrame();
     await nextFrame();
-    const shot = (await chrome.runtime.sendMessage({
-      type: "capture",
-      rect: selection.rect,
-      devicePixelRatio: selection.devicePixelRatio,
-    } satisfies LoupeMessage)) as CaptureResult;
+    const shot = (await chrome.runtime.sendMessage({ type: "capture-visible" } satisfies LoupeMessage)) as CaptureResult;
     if (!shot.ok) throw new Error(`screenshot failed: ${shot.error}`);
-    await writeScreenshotToClipboard(shot.dataUrl);
+    frozenScreenshotDataUrl = shot.dataUrl;
   } catch (e) {
-    console.warn("[loupe] automatic screenshot clipboard copy failed", e);
+    console.warn("[loupe] selection screenshot capture failed", e);
+    frozenScreenshotDataUrl = null;
+    return null;
   } finally {
     activeOverlay?.setChromeVisible(true);
+  }
+  void copyCroppedToClipboard(frozenScreenshotDataUrl, selection.rect);
+  return freezeBackdrop ? frozenScreenshotDataUrl : null;
+}
+
+async function copyCroppedToClipboard(fullDataUrl: string, rect: Annotation["rect"]): Promise<void> {
+  try {
+    await writeScreenshotToClipboard(await cropFrozenScreenshot(fullDataUrl, rect));
+  } catch (e) {
+    console.warn("[loupe] automatic screenshot clipboard copy failed", e);
   }
 }
 

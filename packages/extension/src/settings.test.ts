@@ -16,6 +16,8 @@ function settings(overrides: Partial<LoupeSettings> = {}): LoupeSettings {
     projectOrigins: ["localhost"],
     codexLaunchMode: "background",
     disabledProviders: [],
+    freezeScope: "selection",
+    freezeByDefault: false,
     bridgeRoutes: [
       {
         origins: ["mac-studio*.ts.net", "*.mac-studio.local"],

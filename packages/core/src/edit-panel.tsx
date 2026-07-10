@@ -33,7 +33,7 @@ import {
 } from "@loupe/ui";
 import { C, GITHUB_LOGO_SVG, GITHUB_REPO_URL, LOUPE_LOGO_SVG } from "./overlay-classes.js";
 import { LibraryPicker } from "./library-picker.js";
-import type { ActionDescriptor, AnnotationTarget, Rect } from "./model.js";
+import type { ActionDescriptor, ActionRunSettings, AnnotationTarget, Rect } from "./model.js";
 import type { LibraryItem } from "./selection.js";
 
 const CLAUDE_LOGO_SVG =
@@ -51,6 +51,7 @@ const COPILOT_LOGO_SVG =
 
 const CLAUDE_COLOR = "#d97757";
 const MODEL_SELECTIONS_STORAGE_KEY = "loupe:agent-model-selections";
+const SETTINGS_SELECTIONS_STORAGE_KEY = "loupe:agent-settings-selections";
 
 export interface EditPanelReference {
   dataUrl: string;
@@ -95,7 +96,7 @@ export interface LoupeEditPanelProps {
   actions: ActionDescriptor[];
   defaultActionId: string;
   submittingActionId?: string | null;
-  onSubmit: (actionId: string, model?: string) => void | Promise<void>;
+  onSubmit: (actionId: string, model?: string, settings?: ActionRunSettings) => void | Promise<void>;
   error?: string | null;
 
   onClose: () => void;
@@ -152,6 +153,9 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
   const submitting = submittingActionId != null;
   const hasDefault = actions.some((a) => a.id === defaultActionId);
   const [selectedModels, setSelectedModels] = useState<Record<string, string>>(() => defaultModels(actions, readStoredModelSelections()));
+  const [selectedSettings, setSelectedSettings] = useState<Record<string, ActionRunSettings>>(() =>
+    defaultSettings(actions, readStoredSettingsSelections()),
+  );
 
   useEffect(() => {
     setSelectedModels((current) => defaultModels(actions, current));
@@ -161,6 +165,14 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
     setSelectedModels((current) => {
       const next = defaultModels(actions, { ...current, [actionId]: model });
       writeStoredModelSelections(next);
+      return next;
+    });
+  };
+
+  const chooseSpeed = (actionId: string, speed: string): void => {
+    setSelectedSettings((current) => {
+      const next = defaultSettings(actions, { ...current, [actionId]: { ...current[actionId], speed } });
+      writeStoredSettingsSelections(next);
       return next;
     });
   };
@@ -179,7 +191,7 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
     }
     if (!hasDefault || submitting) return;
     e.preventDefault();
-    void onSubmit(defaultActionId, selectedModels[defaultActionId]);
+    void onSubmit(defaultActionId, selectedModels[defaultActionId], selectedSettings[defaultActionId]);
   };
 
   return (
@@ -277,11 +289,13 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
                 key={a.id}
                 action={a}
                 selectedModel={selectedModels[a.id] ?? a.defaultModel ?? a.models[0]?.id}
+                selectedSettings={selectedSettings[a.id]}
                 isDefault={isDefault}
                 submittingActionId={submittingActionId}
                 disabled={submitting && submittingActionId !== a.id}
                 onModelChange={(model) => chooseModel(a.id, model)}
-                onSubmit={(model) => void onSubmit(a.id, model)}
+                onSpeedChange={(speed) => chooseSpeed(a.id, speed)}
+                onSubmit={(model, settings) => void onSubmit(a.id, model, settings)}
               />
             ) : (
               <Button
@@ -310,21 +324,26 @@ export function LoupeEditPanel(props: LoupeEditPanelProps): ReactElement {
 function AgentModelButton({
   action,
   selectedModel,
+  selectedSettings,
   isDefault,
   submittingActionId,
   disabled,
   onModelChange,
+  onSpeedChange,
   onSubmit,
 }: {
   action: ActionDescriptor;
   selectedModel: string | undefined;
+  selectedSettings: ActionRunSettings | undefined;
   isDefault: boolean;
   submittingActionId?: string | null;
   disabled?: boolean;
   onModelChange: (model: string) => void;
-  onSubmit: (model?: string) => void;
+  onSpeedChange: (speed: string) => void;
+  onSubmit: (model?: string, settings?: ActionRunSettings) => void;
 }): ReactElement {
   const selected = action.models?.find((model) => model.id === selectedModel) ?? action.models?.[0];
+  const selectedSpeed = action.speeds?.find((speed) => speed.id === selectedSettings?.speed) ?? action.speeds?.[0];
   const buttonVariant = isDefault ? "default" : "secondary";
   return (
     <ButtonGroup className="w-full min-w-0">
@@ -335,7 +354,7 @@ function AgentModelButton({
         loading={submittingActionId === action.id}
         disabled={disabled}
         title={selected ? `${actionLabel(action)} with ${selected.label}` : action.hint}
-        onClick={() => onSubmit(selected?.id)}
+        onClick={() => onSubmit(selected?.id, selectedSpeed ? { speed: selectedSpeed.id } : undefined)}
       >
         <ActionIcon action={action} />
         <span className="min-w-0 truncate">{actionLabel(action)}</span>
@@ -372,6 +391,42 @@ function AgentModelButton({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      {action.speeds?.length ? (
+        <>
+          <ButtonGroupSeparator />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant={buttonVariant}
+                className="min-w-0 flex-[0.75_1_0] justify-between px-2"
+                disabled={disabled}
+                title={`Choose ${actionLabel(action)} speed`}
+                aria-label={`Choose ${actionLabel(action)} speed`}
+              >
+                <span className="min-w-0 truncate text-[11px]">{selectedSpeed?.label ?? "Speed"}</span>
+                <ChevronDown width={15} height={15} aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {action.speeds.map((speed) => (
+                <DropdownMenuItem key={speed.id} onSelect={() => onSpeedChange(speed.id)} className="items-start">
+                  <Check
+                    width={14}
+                    height={14}
+                    className={speed.id === selectedSpeed?.id ? "mt-0.5 opacity-100" : "mt-0.5 opacity-0"}
+                    aria-hidden
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate">{speed.label}</span>
+                    {speed.hint ? <span className="block truncate text-[11px] text-muted-foreground">{speed.hint}</span> : null}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      ) : null}
     </ButtonGroup>
   );
 }
@@ -384,9 +439,24 @@ function defaultModels(actions: ActionDescriptor[], preferred: Record<string, st
   );
 }
 
+function defaultSettings(actions: ActionDescriptor[], preferred: Record<string, ActionRunSettings> = {}): Record<string, ActionRunSettings> {
+  return Object.fromEntries(
+    actions
+      .flatMap((action): [string, ActionRunSettings][] => {
+        const speed = validSpeedId(action, preferred[action.id]?.speed) ?? action.defaultSpeed ?? action.speeds?.[0]?.id;
+        return speed ? [[action.id, { speed }]] : [];
+      }),
+  );
+}
+
 function validModelId(action: ActionDescriptor, model: string | undefined): string | undefined {
   if (!model || !action.models?.length) return undefined;
   return action.models.some((option) => option.id === model) ? model : undefined;
+}
+
+function validSpeedId(action: ActionDescriptor, speed: string | undefined): string | undefined {
+  if (!speed || !action.speeds?.length) return undefined;
+  return action.speeds.some((option) => option.id === speed) ? speed : undefined;
 }
 
 function readStoredModelSelections(): Record<string, string> {
@@ -404,12 +474,41 @@ function readStoredModelSelections(): Record<string, string> {
   }
 }
 
+function readStoredSettingsSelections(): Record<string, ActionRunSettings> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_SELECTIONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .flatMap(([action, settings]): [string, ActionRunSettings][] => {
+          if (!settings || typeof settings !== "object") return [];
+          const speed = (settings as { speed?: unknown }).speed;
+          return typeof speed === "string" ? [[action, { speed }]] : [];
+        }),
+    );
+  } catch {
+    return {};
+  }
+}
+
 function writeStoredModelSelections(models: Record<string, string>): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(MODEL_SELECTIONS_STORAGE_KEY, JSON.stringify(models));
   } catch {
     // Storage can be unavailable in restrictive embeds; model choice still works for this panel instance.
+  }
+}
+
+function writeStoredSettingsSelections(settings: Record<string, ActionRunSettings>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SETTINGS_SELECTIONS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Storage can be unavailable in restrictive embeds; setting choice still works for this panel instance.
   }
 }
 

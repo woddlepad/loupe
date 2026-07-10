@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ActionModelOption } from "@loupe/core/model";
+import type { ActionModelOption, ActionSpeedOption } from "@loupe/core/model";
 import type { LinearConfig } from "./actions/linear.js";
 
 export type CodexLaunchMode = "background" | "url-handler";
@@ -39,6 +39,12 @@ export interface AgentCommand {
   defaultModel?: string;
   /** Extra argv inserted after argv[0] when a model is selected. Defaults to ["--model", "{model}"]. */
   modelArgv?: string[];
+  /** Speed/service-tier choices advertised to the Loupe panel for this agent. */
+  speeds?: ActionSpeedOption[];
+  /** Speed/service-tier used when the panel has not sent a selected speed. */
+  defaultSpeed?: string;
+  /** Extra argv inserted after argv[0] when a speed is selected. Defaults to Codex service_tier config overrides. */
+  speedArgv?: string[];
 }
 
 export interface BridgeConfig {
@@ -67,20 +73,23 @@ export interface BridgeConfig {
 export function codexBackgroundAgent(): AgentCommand {
   const codexCloudEnv = process.env["LOUPE_CODEX_CLOUD_ENV"] ?? process.env["CODEX_CLOUD_ENV"];
   const models = codexModels();
+  const speeds = codexSpeeds();
   if (codexCloudEnv) {
     return {
       mode: "spawn",
       argv: ["codex", "cloud", "exec", "--env", codexCloudEnv, "{loupeCommand}"],
       models,
-      defaultModel: "gpt-5.5",
+      defaultModel: "gpt-5.6",
+      speeds,
+      defaultSpeed: "default",
     };
   }
   if (shouldUseCodexAppServer()) return codexAppServerAgent(models);
-  return { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"], models, defaultModel: "gpt-5.5" };
+  return { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"], models, defaultModel: "gpt-5.6", speeds, defaultSpeed: "default" };
 }
 
 export function codexUrlHandlerAgent(): AgentCommand {
-  return { mode: "codex-app", models: codexModels(), defaultModel: "gpt-5.5" };
+  return { mode: "codex-app", models: codexModels(), defaultModel: "gpt-5.6", speeds: codexSpeeds(), defaultSpeed: "default" };
 }
 
 export function codexAppServerAgent(models = codexModels()): AgentCommand {
@@ -88,7 +97,9 @@ export function codexAppServerAgent(models = codexModels()): AgentCommand {
     mode: "codex-app-server",
     socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"],
     models,
-    defaultModel: "gpt-5.5",
+    defaultModel: "gpt-5.6",
+    speeds: codexSpeeds(),
+    defaultSpeed: "default",
   };
 }
 
@@ -139,10 +150,21 @@ function claudeModels(): ActionModelOption[] {
 
 function codexModels(): ActionModelOption[] {
   return [
-    { id: "gpt-5.5", label: "GPT-5.5", hint: "frontier coding model" },
+    { id: "gpt-5.6", label: "GPT-5.6", hint: "default alias for Sol" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "flagship capability" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "balanced speed and cost" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "efficient high-volume work" },
+    { id: "gpt-5.5", label: "GPT-5.5", hint: "previous frontier coding model" },
     { id: "gpt-5.4", label: "GPT-5.4", hint: "strong everyday coding" },
     { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "faster, lower cost" },
     { id: "gpt-5.3-codex-spark", label: "Codex Spark", hint: "ultra-fast coding" },
+  ];
+}
+
+function codexSpeeds(): ActionSpeedOption[] {
+  return [
+    { id: "default", label: "Default", hint: "use configured service tier" },
+    { id: "fast", label: "Fast", hint: "Codex Fast service tier when available" },
   ];
 }
 

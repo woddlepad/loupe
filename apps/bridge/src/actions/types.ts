@@ -1,4 +1,4 @@
-import type { ActionModelOption, Annotation } from "@loupe/core/model";
+import type { ActionModelOption, ActionRunSettings, ActionSpeedOption, Annotation } from "@loupe/core/model";
 import type { BridgeConfig } from "../config.js";
 import type { WrittenBundle } from "../bundle.js";
 import type { SourceResolution } from "../resolve/index.js";
@@ -11,6 +11,7 @@ export interface ActionContext {
   resolution: SourceResolution;
   config: BridgeConfig;
   selectedModel?: string;
+  selectedSettings?: ActionRunSettings;
 }
 
 export interface ActionOutcome {
@@ -32,6 +33,8 @@ export interface Action {
   hint?: string;
   models?: ActionModelOption[];
   defaultModel?: string;
+  speeds?: ActionSpeedOption[];
+  defaultSpeed?: string;
   run(ctx: ActionContext): Promise<ActionOutcome> | ActionOutcome;
 }
 

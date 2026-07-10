@@ -237,6 +237,10 @@ export interface ActionDescriptor {
   models?: ActionModelOption[];
   /** Model id used when the user has not picked one explicitly. */
   defaultModel?: string;
+  /** Optional speed/service-tier choices for agent actions that support per-run selection. */
+  speeds?: ActionSpeedOption[];
+  /** Speed id used when the user has not picked one explicitly. */
+  defaultSpeed?: string;
 }
 
 export interface ActionModelOption {
@@ -248,6 +252,20 @@ export interface ActionModelOption {
   hint?: string;
 }
 
+export interface ActionSpeedOption {
+  /** CLI/config speed id, e.g. "default" or "fast". */
+  id: string;
+  /** Human-readable label shown in the dropdown. */
+  label: string;
+  /** Optional short descriptor shown below the speed label. */
+  hint?: string;
+}
+
+export interface ActionRunSettings {
+  /** Optional service-tier/speed selection. */
+  speed?: string;
+}
+
 /** The payload the extension POSTs to the bridge. */
 export interface AnnotatePayload {
   annotation: Annotation;
@@ -255,4 +273,6 @@ export interface AnnotatePayload {
   actions: string[];
   /** Optional per-action model ids selected by the user. */
   actionModels?: Record<string, string>;
+  /** Optional per-action non-model settings selected by the user. */
+  actionSettings?: Record<string, ActionRunSettings>;
 }
