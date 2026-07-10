@@ -118,8 +118,10 @@ Built-in agent modes:
   prefer URL-handler handoff.
 - `codex-app-server` creates a Codex thread through the Codex app-server daemon
   on the bridge machine. Use it for remote bridges when your local Codex app is
-  connected to that host over SSH. Set `LOUPE_CODEX_APP_SERVER=1` for the default
-  Codex action, or configure:
+  connected to that host over SSH. The default Codex background action uses this
+  mode automatically when the Codex app-server socket exists; otherwise it falls
+  back to `codex exec`. Set `LOUPE_CODEX_APP_SERVER=1` to force the default Codex
+  action into app-server mode before the socket exists, or configure:
 
 ```json
 {

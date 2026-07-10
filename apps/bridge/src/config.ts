@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { ActionModelOption } from "@loupe/core/model";
 import type { LinearConfig } from "./actions/linear.js";
 
@@ -74,6 +75,7 @@ export function codexBackgroundAgent(): AgentCommand {
       defaultModel: "gpt-5.5",
     };
   }
+  if (shouldUseCodexAppServer()) return codexAppServerAgent(models);
   return { mode: "spawn", argv: ["codex", "exec", "{loupeCommand}"], models, defaultModel: "gpt-5.5" };
 }
 
@@ -81,8 +83,28 @@ export function codexUrlHandlerAgent(): AgentCommand {
   return { mode: "codex-app", models: codexModels(), defaultModel: "gpt-5.5" };
 }
 
+export function codexAppServerAgent(models = codexModels()): AgentCommand {
+  return {
+    mode: "codex-app-server",
+    socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"],
+    models,
+    defaultModel: "gpt-5.5",
+  };
+}
+
+export function defaultCodexAppServerSocketPath(): string {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  return join(codexHome, "app-server-control", "app-server-control.sock");
+}
+
+function shouldUseCodexAppServer(): boolean {
+  const requested = process.env["LOUPE_CODEX_APP_SERVER"];
+  if (requested && requested !== "0") return true;
+  const socketPath = process.env["LOUPE_CODEX_APP_SERVER_SOCKET"] || defaultCodexAppServerSocketPath();
+  return existsSync(socketPath);
+}
+
 export function defaultAgents(): Record<string, AgentCommand> {
-  const codexAppServer = process.env["LOUPE_CODEX_APP_SERVER"];
   return {
     // Claude: start a background Claude Code run that picks up the saved Loupe
     // bundle through the installed /loupe slash command.
@@ -92,16 +114,10 @@ export function defaultAgents(): Record<string, AgentCommand> {
       models: claudeModels(),
       defaultModel: "fable",
     },
-    // Codex: run in the background by default. For remote Desktop handoff,
-    // LOUPE_CODEX_APP_SERVER keeps the existing app-server behavior explicit.
-    codex: codexAppServer
-      ? {
-          mode: "codex-app-server",
-          socketPath: process.env["LOUPE_CODEX_APP_SERVER_SOCKET"],
-          models: codexModels(),
-          defaultModel: "gpt-5.5",
-        }
-      : codexBackgroundAgent(),
+    // Codex: prefer the app-server when the Desktop socket is available so
+    // background handoffs appear in the Codex app; otherwise fall back to the
+    // headless CLI.
+    codex: codexBackgroundAgent(),
     // GitHub Copilot CLI: the standalone `copilot` binary (not the deprecated
     // `gh copilot` extension). It has no /loupe shim, so it receives the full
     // self-contained inline prompt. --allow-all-tools skips per-tool approval.

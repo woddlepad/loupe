@@ -470,7 +470,8 @@ function App() {
         </SelectContent>
       </Select>
       <p className="text-loupe-faint text-[11px] mt-1.5">
-        background runs Codex from the bridge; URL handler opens a visible Codex app thread.
+        background uses the Codex app-server when available, then falls back to the bridge CLI;
+        URL handler always opens a visible app thread.
       </p>
 
       <label className="block text-[12px] text-loupe-muted mb-1.5 mt-4">Providers</label>

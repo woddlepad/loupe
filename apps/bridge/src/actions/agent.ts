@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { existsSync, openSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { createConnection, type Socket } from "node:net";
 import type { Annotation } from "@loupe/core/model";
-import type { AgentCommand, BridgeConfig } from "../config.js";
+import { defaultCodexAppServerSocketPath, type AgentCommand, type BridgeConfig } from "../config.js";
 import type { DreamDetail } from "../dreams.js";
 import type { WrittenBundle } from "../bundle.js";
 import type { SourceResolution } from "../resolve/index.js";
@@ -403,11 +402,6 @@ function buildGroupPrompt(agentName: string, group: string, annotations: StoredA
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-export function defaultCodexAppServerSocketPath(): string {
-  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-  return join(codexHome, "app-server-control", "app-server-control.sock");
 }
 
 function jsonPath(value: unknown, path: string[]): unknown {

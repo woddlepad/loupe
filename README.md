@@ -417,8 +417,14 @@ Agents run in one of four modes:
 - **`session`** — don't spawn anything. The annotation is committed to
   `.loupe/`, so an already-open agent session or custom workflow can pick it up.
 
-For a remote bridge that should hand annotations to the Codex desktop app
-connected to that same host, start the bridge with:
+The built-in Codex background action automatically uses `codex-app-server`
+when the default Codex app-server socket exists at
+`$CODEX_HOME/app-server-control/app-server-control.sock` (or `~/.codex/...`).
+That makes background handoffs appear in Codex Desktop. If the socket is not
+available, Loupe falls back to `codex exec`.
+
+For a remote bridge, or to force app-server mode before the socket exists,
+start the bridge with:
 
 ```sh
 LOUPE_CODEX_APP_SERVER=1 loupe bridge --repo ~/dev/atmOS --host 0.0.0.0

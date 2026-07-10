@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { codexBackgroundAgent, defaultAgents, type AgentCommand } from "./config.js";
-import { agentAvailable, buildCodexUrl, buildDreamLaunchPrompt, defaultCodexAppServerSocketPath, expandAgentArgv } from "./actions/agent.js";
+import { codexBackgroundAgent, defaultAgents, defaultCodexAppServerSocketPath, type AgentCommand } from "./config.js";
+import { agentAvailable, buildCodexUrl, buildDreamLaunchPrompt, expandAgentArgv } from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
 import type { DreamDetail } from "./dreams.js";
 
@@ -58,9 +61,13 @@ test("defaults Codex to background local exec", () => {
   const previousCloud = process.env.LOUPE_CODEX_CLOUD_ENV;
   const previousCodeCloud = process.env.CODEX_CLOUD_ENV;
   const previousAppServer = process.env.LOUPE_CODEX_APP_SERVER;
+  const previousAppServerSocket = process.env.LOUPE_CODEX_APP_SERVER_SOCKET;
+  const previousCodexHome = process.env.CODEX_HOME;
   delete process.env.LOUPE_CODEX_CLOUD_ENV;
   delete process.env.CODEX_CLOUD_ENV;
   delete process.env.LOUPE_CODEX_APP_SERVER;
+  delete process.env.LOUPE_CODEX_APP_SERVER_SOCKET;
+  process.env.CODEX_HOME = mkdtempSync(join(tmpdir(), "loupe-codex-home-no-socket-"));
   try {
     const codex = defaultAgents().codex;
     assert.deepEqual(codex?.argv, ["codex", "exec", "{loupeCommand}"]);
@@ -74,6 +81,36 @@ test("defaults Codex to background local exec", () => {
     restoreEnv("LOUPE_CODEX_CLOUD_ENV", previousCloud);
     restoreEnv("CODEX_CLOUD_ENV", previousCodeCloud);
     restoreEnv("LOUPE_CODEX_APP_SERVER", previousAppServer);
+    restoreEnv("LOUPE_CODEX_APP_SERVER_SOCKET", previousAppServerSocket);
+    restoreEnv("CODEX_HOME", previousCodexHome);
+  }
+});
+
+test("defaults Codex background handoff to app-server when socket exists", () => {
+  const previousCloud = process.env.LOUPE_CODEX_CLOUD_ENV;
+  const previousCodeCloud = process.env.CODEX_CLOUD_ENV;
+  const previousAppServer = process.env.LOUPE_CODEX_APP_SERVER;
+  const previousAppServerSocket = process.env.LOUPE_CODEX_APP_SERVER_SOCKET;
+  const previousCodexHome = process.env.CODEX_HOME;
+  delete process.env.LOUPE_CODEX_CLOUD_ENV;
+  delete process.env.CODEX_CLOUD_ENV;
+  delete process.env.LOUPE_CODEX_APP_SERVER;
+  delete process.env.LOUPE_CODEX_APP_SERVER_SOCKET;
+  process.env.CODEX_HOME = mkdtempSync(join(tmpdir(), "loupe-codex-home-socket-"));
+  try {
+    const socketPath = defaultCodexAppServerSocketPath();
+    mkdirSync(dirname(socketPath), { recursive: true });
+    writeFileSync(socketPath, "");
+
+    const codex = codexBackgroundAgent();
+    assert.equal(codex.mode, "codex-app-server");
+    assert.equal(codex.socketPath, undefined);
+  } finally {
+    restoreEnv("LOUPE_CODEX_CLOUD_ENV", previousCloud);
+    restoreEnv("CODEX_CLOUD_ENV", previousCodeCloud);
+    restoreEnv("LOUPE_CODEX_APP_SERVER", previousAppServer);
+    restoreEnv("LOUPE_CODEX_APP_SERVER_SOCKET", previousAppServerSocket);
+    restoreEnv("CODEX_HOME", previousCodexHome);
   }
 });
 
