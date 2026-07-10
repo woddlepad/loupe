@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { listDreams, readDream, writeDream } from "./dreams.js";
+import { anchorSummary, listDreams, readDream, writeDream, writeDreamFeedback } from "./dreams.js";
 
 test("writes and reads Dreamer artifacts", () => {
   const repo = mkdtempSync(join(tmpdir(), "loupe-dream-"));
@@ -72,4 +72,107 @@ test("rejects goals over the launch limit", () => {
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test("writes anchored feedback under feedback/ without polluting the dream", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-dream-feedback-"));
+  try {
+    const dream = writeDream(repo, { title: "Feedback target", plan: "# Feedback target\n" });
+    const before = readDream(repo, dream.id)!;
+
+    const written = writeDreamFeedback(repo, dream.id, {
+      note: "Tighten the verification section",
+      tab: "plan",
+      targetFile: "plan.mdx",
+      url: "http://localhost:7337/dreamer",
+      anchor: {
+        kind: "markdown",
+        heading: "Verification",
+        headingLevel: 2,
+        quote: "Run the bash checks",
+        selector: "article > ul > li:nth-of-type(2)",
+        tag: "li",
+        rect: { x: 320, y: 410, width: 520, height: 48 },
+      },
+    });
+
+    assert.match(written.id, /^fb-/);
+    assert.equal(written.relPath, join(".loupe/dreams/feedback-target/feedback", `${written.id}.md`));
+    assert.ok(existsSync(written.absPath));
+
+    const file = readFileSync(written.absPath, "utf8");
+    assert.match(file, /^---\nid: fb-/);
+    assert.match(file, /tab: plan/);
+    assert.match(file, /target: plan\.mdx/);
+    assert.match(file, /Tighten the verification section/);
+    assert.match(file, /- Section: "Verification" \(h2\)/);
+    assert.match(file, /- Element: <li> — "Run the bash checks"/);
+    assert.match(file, /- Viewport rect: x=320 y=410 520×48/);
+
+    // Fire-and-forget: the feedback subdir must stay invisible to the dream.
+    const after = readDream(repo, dream.id)!;
+    assert.deepEqual(after.files, before.files);
+    assert.deepEqual(after.content, before.content);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("rejects feedback for unknown or unsafe dream ids", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-dream-feedback-safe-"));
+  try {
+    const input = { note: "n", tab: "plan" as const, anchor: { kind: "markdown" as const } };
+    assert.throws(() => writeDreamFeedback(repo, "does-not-exist", input), /not found/);
+    assert.throws(() => writeDreamFeedback(repo, "../escape", input), /not found/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("summarizes each anchor kind", () => {
+  assert.equal(
+    anchorSummary({
+      note: "",
+      tab: "plan",
+      anchor: { kind: "markdown", heading: "Implementation Plan", headingLevel: 2, quote: "Add a compile step", tag: "li" },
+    }),
+    'section "Implementation Plan" (h2) → <li> "Add a compile step"',
+  );
+  assert.equal(
+    anchorSummary({
+      note: "",
+      tab: "prototype",
+      targetFile: "prototype.html",
+      anchor: {
+        kind: "iframe",
+        tag: "button",
+        quote: "Save changes",
+        selector: "form > button.primary",
+        iframeRect: { x: 120, y: 80, width: 260, height: 140 },
+        iframeScroll: { x: 0, y: 250 },
+      },
+    }),
+    '<button> "Save changes" inside the prototype.html prototype (selector form > button.primary)',
+  );
+  assert.equal(
+    anchorSummary({
+      note: "",
+      tab: "prototype",
+      targetFile: "prototype.html",
+      anchor: { kind: "iframe", iframeRect: { x: 120, y: 80, width: 260, height: 140 } },
+    }),
+    "region x=120 y=80 260×140 inside the prototype.html prototype",
+  );
+  assert.equal(
+    anchorSummary({
+      note: "",
+      tab: "canvas",
+      anchor: { kind: "image", image: "shot-01.png", rect: { x: 40, y: 60, width: 300, height: 180 } },
+    }),
+    "image shot-01.png (viewport region x=40 y=60 300×180)",
+  );
+  assert.equal(
+    anchorSummary({ note: "", tab: "report", anchor: { kind: "element", tag: "td", quote: "3 failed", selector: "table td" } }),
+    '<td> "3 failed" (selector table td)',
+  );
 });

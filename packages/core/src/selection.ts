@@ -37,6 +37,19 @@ export interface LoupeOverlayOptions {
    * "reference" on a foreign site — capture a screenshot + note into the library.
    */
   mode?: "annotate" | "reference";
+  /** Show the group selector in the annotate panel (default true). */
+  showGroup?: boolean;
+  /** Show the reference-image row in the annotate panel (default true). */
+  showRefs?: boolean;
+  /**
+   * Element the overlay lives in and is scoped to. Defaults to `document.body`.
+   * Its owner document/window drive all mounting, hit-testing, event binding and
+   * coordinates — so passing a same-origin iframe's `contentDocument.body` runs
+   * the overlay inside that iframe. When it is a sub-container (not the document
+   * body), targets and gestures outside it are ignored and pass through to the
+   * page, so the surrounding UI stays interactive.
+   */
+  root?: HTMLElement;
   /** Reference library items, offered via "from library" to avoid copy-paste. */
   library?: LibraryItem[];
   /** Resolve a library item's image to a data URL when the user picks it. */
@@ -146,6 +159,12 @@ export class LoupeOverlay {
   private recordTimer: number | null = null;
   private frozenScreenshotEl: HTMLImageElement | null = null;
 
+  // The overlay's world: the scoping element and its owner document/window.
+  // Default to the top document; a same-origin iframe body reroutes everything.
+  private rootEl: HTMLElement;
+  private doc: Document;
+  private win: Window & typeof globalThis;
+
   // --- React editing panel state (owned here; the panel is fully controlled) ---
   private editRoot: Root | null = null;
   private editPanelEl: HTMLElement | null = null;
@@ -165,6 +184,8 @@ export class LoupeOverlay {
       createGroup: async () => undefined,
       stylesheet: "",
       mode: "annotate",
+      showGroup: true,
+      showRefs: true,
       library: [],
       resolveLibraryImage: async () => null,
       generateId: defaultId,
@@ -176,12 +197,28 @@ export class LoupeOverlay {
       onDisable: () => { },
       onSelectionCapture: async () => undefined,
       recorder: null,
+      root: document.body,
       ...options,
     };
     this.draft = this.opts.draft;
     if (!this.opts.actions || this.opts.actions.length === 0) {
       this.opts.actions = [{ id: "save", label: "Save to repo" }];
     }
+    this.rootEl = this.opts.root;
+    this.doc = this.rootEl.ownerDocument;
+    this.win = (this.doc.defaultView ?? window) as Window & typeof globalThis;
+  }
+
+  /** True unless the overlay is scoped to a sub-container of its document. */
+  private get scopedToDocument(): boolean {
+    return this.rootEl === this.doc.body || this.rootEl === this.doc.documentElement;
+  }
+
+  /** Whether an event targets the scoping element (always true in full-document mode). */
+  private eventInScope(e: Event): boolean {
+    if (this.scopedToDocument) return true;
+    const target = e.target as Node | null;
+    return !!target && this.rootEl.contains(target);
   }
 
   get active(): boolean {
@@ -205,7 +242,7 @@ export class LoupeOverlay {
   }
 
   get selection(): { rect: Rect; devicePixelRatio: number } {
-    return { rect: { ...this.current }, devicePixelRatio: window.devicePixelRatio || 1 };
+    return { rect: { ...this.current }, devicePixelRatio: this.win.devicePixelRatio || 1 };
   }
 
   toggle(): void {
@@ -253,14 +290,14 @@ export class LoupeOverlay {
 
   private mount(): void {
     if (this.host) return;
-    const host = document.createElement("div");
+    const host = this.doc.createElement("div");
     host.setAttribute("data-loupe-overlay", "");
     const root = host.attachShadow({ mode: "open" });
-    const style = document.createElement("style");
+    const style = this.doc.createElement("style");
     style.textContent = BASE + "\n" + this.opts.stylesheet;
     root.append(style);
     containEvents(host);
-    document.body.append(host);
+    this.doc.body.append(host);
     this.host = host;
     this.root = root;
   }
@@ -308,7 +345,7 @@ export class LoupeOverlay {
   }
 
   private renderArmed(): void {
-    this.moveHostTo(document.body);
+    this.moveHostTo(this.doc.body);
     this.clearLayer();
     if (!this.root) return;
     const layer = el("div", { class: C.layer });
@@ -339,6 +376,9 @@ export class LoupeOverlay {
     if (!this.active) return;
     // While recording, the user is driving the real app — let page events through.
     if (this.phase === "recording") return;
+    // Scoped mode: clicks outside the container are the surrounding UI's — let
+    // them behave normally instead of starting a selection or being swallowed.
+    if (this.phase === "armed" && !this.eventInScope(e)) return;
     if (this.phase !== "armed") {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -361,10 +401,10 @@ export class LoupeOverlay {
     this.setInspectCursor(true);
     this.start = { x: e.clientX, y: e.clientY };
     this.current = { x: e.clientX, y: e.clientY, width: 0, height: 0 };
-    window.addEventListener("pointermove", this.onMouseMove, true);
-    window.addEventListener("pointerup", this.onMouseUp, true);
-    window.addEventListener("mousemove", this.onMouseMove, true);
-    window.addEventListener("mouseup", this.onMouseUp, true);
+    this.win.addEventListener("pointermove", this.onMouseMove, true);
+    this.win.addEventListener("pointerup", this.onMouseUp, true);
+    this.win.addEventListener("mousemove", this.onMouseMove, true);
+    this.win.addEventListener("mouseup", this.onMouseUp, true);
     this.renderDragging();
   };
 
@@ -385,17 +425,17 @@ export class LoupeOverlay {
   private onMouseUp = (e: MouseEvent): void => {
     e.preventDefault();
     e.stopImmediatePropagation();
-    window.removeEventListener("pointermove", this.onMouseMove, true);
-    window.removeEventListener("pointerup", this.onMouseUp, true);
-    window.removeEventListener("mousemove", this.onMouseMove, true);
-    window.removeEventListener("mouseup", this.onMouseUp, true);
+    this.win.removeEventListener("pointermove", this.onMouseMove, true);
+    this.win.removeEventListener("pointerup", this.onMouseUp, true);
+    this.win.removeEventListener("mousemove", this.onMouseMove, true);
+    this.win.removeEventListener("mouseup", this.onMouseUp, true);
     if (this.current.width < 6 || this.current.height < 6) {
       const targetEl = this.elementAt(e.clientX, e.clientY) ?? this.mouseDownEl;
       this.mouseDownEl = null;
       if (targetEl) {
         this.current = rectOf(targetEl);
         this.suppressNextClick = true;
-        window.addEventListener("click", this.onSuppressClick, true);
+        this.win.addEventListener("click", this.onSuppressClick, true);
         this.enterEditingForElement(targetEl);
         return;
       }
@@ -405,14 +445,14 @@ export class LoupeOverlay {
     }
     this.mouseDownEl = null;
     this.suppressNextClick = true;
-    window.addEventListener("click", this.onSuppressClick, true);
+    this.win.addEventListener("click", this.onSuppressClick, true);
     this.enterEditing();
   };
 
   private onSuppressClick = (e: MouseEvent): void => {
     if (!this.suppressNextClick) return;
     this.suppressNextClick = false;
-    window.removeEventListener("click", this.onSuppressClick, true);
+    this.win.removeEventListener("click", this.onSuppressClick, true);
     e.preventDefault();
     e.stopImmediatePropagation();
   };
@@ -442,9 +482,12 @@ export class LoupeOverlay {
 
   private elementAt(x: number, y: number): Element | null {
     return this.withHostHidden(() => {
-      const hit = document.elementFromPoint(x, y);
-      if (!hit || hit === document.documentElement || hit === document.body) return null;
+      const hit = this.doc.elementFromPoint(x, y);
+      if (!hit || hit === this.doc.documentElement || hit === this.doc.body) return null;
       if (hit.closest("[data-loupe-overlay]")) return null;
+      // Scoped mode: ignore anything outside the container so the surrounding UI
+      // stays interactive and is never annotated.
+      if (!this.scopedToDocument && !this.rootEl.contains(hit)) return null;
       return hit;
     });
   }
@@ -478,7 +521,7 @@ export class LoupeOverlay {
     label.style.left = `${Math.max(8, rect.x)}px`;
     label.style.top = `${labelTop(rect)}px`;
     const labelWidth = label.getBoundingClientRect().width;
-    label.style.left = `${Math.min(Math.max(8, rect.x), window.innerWidth - labelWidth - 8)}px`;
+    label.style.left = `${Math.min(Math.max(8, rect.x), this.win.innerWidth - labelWidth - 8)}px`;
   }
 
   private renderDragging(): void {
@@ -495,7 +538,7 @@ export class LoupeOverlay {
 
   private appendFrozenScreenshot(): void {
     if (!this.root || !this.opts.frozenScreenshotUrl) return;
-    const img = document.createElement("img");
+    const img = this.doc.createElement("img");
     img.src = this.opts.frozenScreenshotUrl;
     img.alt = "";
     img.setAttribute("aria-hidden", "true");
@@ -512,8 +555,8 @@ export class LoupeOverlay {
     ].join(";");
     if (this.opts.freezeScope !== "screen") {
       const r = this.current;
-      const right = Math.max(0, window.innerWidth - (r.x + r.width));
-      const bottom = Math.max(0, window.innerHeight - (r.y + r.height));
+      const right = Math.max(0, this.win.innerWidth - (r.x + r.width));
+      const bottom = Math.max(0, this.win.innerHeight - (r.y + r.height));
       img.style.clipPath = `inset(${Math.max(0, r.y)}px ${right}px ${bottom}px ${Math.max(0, r.x)}px)`;
     }
     this.frozenScreenshotEl = img;
@@ -620,12 +663,12 @@ export class LoupeOverlay {
 
   private startRecordTimer(): void {
     this.stopRecordTimer();
-    this.recordTimer = window.setInterval(() => this.updateRecordTime(), 250);
+    this.recordTimer = this.win.setInterval(() => this.updateRecordTime(), 250);
   }
 
   private stopRecordTimer(): void {
     if (this.recordTimer !== null) {
-      window.clearInterval(this.recordTimer);
+      this.win.clearInterval(this.recordTimer);
       this.recordTimer = null;
     }
   }
@@ -636,7 +679,7 @@ export class LoupeOverlay {
   }
 
   private renderRecording(state: "starting" | "active" | "processing" | "error", message?: string): void {
-    this.moveHostTo(document.body);
+    this.moveHostTo(this.doc.body);
     this.clearLayer();
     if (!this.root) return;
     const layer = el("div", { class: C.layer });
@@ -695,7 +738,7 @@ export class LoupeOverlay {
 
   private renderRecordingEditing(nonce: number): void {
     if (nonce !== this.renderNonce || this.phase !== "editing") return;
-    this.moveHostTo(document.body);
+    this.moveHostTo(this.doc.body);
     this.clearLayer();
     if (!this.root) return;
     this.appendFrozenScreenshot();
@@ -731,11 +774,11 @@ export class LoupeOverlay {
     const group = this.editGroup.trim();
     return {
       id: this.opts.generateId(),
-      url: location.href,
-      title: document.title,
-      rect: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
-      devicePixelRatio: window.devicePixelRatio || 1,
-      scroll: { x: window.scrollX, y: window.scrollY },
+      url: this.win.location.href,
+      title: this.doc.title,
+      rect: { x: 0, y: 0, width: this.win.innerWidth, height: this.win.innerHeight },
+      devicePixelRatio: this.win.devicePixelRatio || 1,
+      scroll: { x: this.win.scrollX, y: this.win.scrollY },
       target: { tag: "body", selector: "body", text: "", dataAttributes: {}, className: "", componentChain: [] },
       note: this.editNote.trim(),
       references: [],
@@ -777,15 +820,15 @@ export class LoupeOverlay {
     if (!on) {
       this.cursorStyle?.remove();
       this.cursorStyle = null;
-      document.documentElement.removeAttribute("data-loupe-inspecting");
+      this.doc.documentElement.removeAttribute("data-loupe-inspecting");
       return;
     }
     if (this.cursorStyle) return;
-    const style = document.createElement("style");
+    const style = this.doc.createElement("style");
     style.setAttribute("data-loupe-cursor", "");
     style.textContent = "html[data-loupe-inspecting], html[data-loupe-inspecting] * { cursor: crosshair !important; }";
-    document.documentElement.setAttribute("data-loupe-inspecting", "");
-    document.head.append(style);
+    this.doc.documentElement.setAttribute("data-loupe-inspecting", "");
+    this.doc.head.append(style);
     this.cursorStyle = style;
   }
 
@@ -793,7 +836,7 @@ export class LoupeOverlay {
     const target = await this.opts.captureTarget(targetEl);
     if (nonce !== this.renderNonce || this.phase !== "editing") return;
 
-    this.moveHostTo(document.body);
+    this.moveHostTo(this.doc.body);
     this.clearLayer();
     if (!this.root) return;
     this.appendFrozenScreenshot();
@@ -803,20 +846,20 @@ export class LoupeOverlay {
 
     const isRef = this.opts.mode === "reference";
     // Pasted images are attached to the annotate panel's reference row.
-    this.editRefsEnabled = !isRef;
+    this.editRefsEnabled = !isRef && this.opts.showRefs;
     this.editError = null;
     this.editSubmitting = null;
     this.editConfig = {
       variant: isRef ? "reference" : "annotate",
       title: isRef
-        ? document.title || location.host
+        ? this.doc.title || this.win.location.host
         : crumbTitle(target.componentChain.map((c) => c.name), target.tag),
       target: isRef ? null : target,
-      crumbsText: isRef ? `reference · ${location.host}` : undefined,
+      crumbsText: isRef ? `reference · ${this.win.location.host}` : undefined,
       placeholder: isRef ? "what this shows / what to match…" : "what's wrong / what to change…",
       marquee: { ...this.current },
-      showGroup: !isRef,
-      showRefs: !isRef,
+      showGroup: !isRef && this.opts.showGroup,
+      showRefs: !isRef && this.opts.showRefs,
       actions: isRef
         ? [{ id: "reference", label: "Save to library", hint: "save this capture as a reference" }]
         : actionLast(this.opts.actions, "save"),
@@ -968,11 +1011,11 @@ export class LoupeOverlay {
     const group = this.editGroup.trim();
     return {
       id: this.opts.generateId(),
-      url: location.href,
-      title: document.title,
+      url: this.win.location.href,
+      title: this.doc.title,
       rect: { ...this.current },
-      devicePixelRatio: window.devicePixelRatio || 1,
-      scroll: { x: window.scrollX, y: window.scrollY },
+      devicePixelRatio: this.win.devicePixelRatio || 1,
+      scroll: { x: this.win.scrollX, y: this.win.scrollY },
       target,
       note: this.editNote.trim(),
       references: this.refs.map((r) => ({ dataUrl: r.dataUrl })),
@@ -988,11 +1031,11 @@ export class LoupeOverlay {
     const group = this.editGroup.trim();
     this.draft = {
       mode: this.opts.mode,
-      url: location.href,
-      title: document.title,
+      url: this.win.location.href,
+      title: this.doc.title,
       rect: { ...this.current },
-      devicePixelRatio: window.devicePixelRatio || 1,
-      scroll: { x: window.scrollX, y: window.scrollY },
+      devicePixelRatio: this.win.devicePixelRatio || 1,
+      scroll: { x: this.win.scrollX, y: this.win.scrollY },
       note,
       group: group || undefined,
       references: this.refs.map((r) => ({ dataUrl: r.dataUrl })),
@@ -1004,32 +1047,32 @@ export class LoupeOverlay {
   // --- event containment (capture phase) ---
 
   private bindKeys(): void {
-    window.addEventListener("keydown", this.onKeyMaster, true);
-    window.addEventListener("mousemove", this.onArmedMouseMoveMaster, true);
-    window.addEventListener("mousedown", this.onArmedMouseDown, true);
-    window.addEventListener("pointerdown", this.onOverlayPointerStartMaster, true);
-    window.addEventListener("touchstart", this.onOverlayPointerStartMaster, true);
-    window.addEventListener("click", this.onOverlayClickMaster, true);
-    window.addEventListener("wheel", this.onScrollLock, { capture: true, passive: false });
-    window.addEventListener("touchmove", this.onScrollLock, { capture: true, passive: false });
-    for (const t of CONTAINED) window.addEventListener(t, this.onEventMaster, true);
+    this.win.addEventListener("keydown", this.onKeyMaster, true);
+    this.win.addEventListener("mousemove", this.onArmedMouseMoveMaster, true);
+    this.win.addEventListener("mousedown", this.onArmedMouseDown, true);
+    this.win.addEventListener("pointerdown", this.onOverlayPointerStartMaster, true);
+    this.win.addEventListener("touchstart", this.onOverlayPointerStartMaster, true);
+    this.win.addEventListener("click", this.onOverlayClickMaster, true);
+    this.win.addEventListener("wheel", this.onScrollLock, { capture: true, passive: false });
+    this.win.addEventListener("touchmove", this.onScrollLock, { capture: true, passive: false });
+    for (const t of CONTAINED) this.win.addEventListener(t, this.onEventMaster, true);
   }
 
   private unbindKeys(): void {
-    window.removeEventListener("keydown", this.onKeyMaster, true);
-    window.removeEventListener("mousemove", this.onArmedMouseMoveMaster, true);
-    window.removeEventListener("mousedown", this.onArmedMouseDown, true);
-    window.removeEventListener("pointerdown", this.onOverlayPointerStartMaster, true);
-    window.removeEventListener("touchstart", this.onOverlayPointerStartMaster, true);
-    window.removeEventListener("click", this.onOverlayClickMaster, true);
-    window.removeEventListener("wheel", this.onScrollLock, true);
-    window.removeEventListener("touchmove", this.onScrollLock, true);
-    window.removeEventListener("pointermove", this.onMouseMove, true);
-    window.removeEventListener("pointerup", this.onMouseUp, true);
-    window.removeEventListener("mousemove", this.onMouseMove, true);
-    window.removeEventListener("mouseup", this.onMouseUp, true);
-    window.removeEventListener("click", this.onSuppressClick, true);
-    for (const t of CONTAINED) window.removeEventListener(t, this.onEventMaster, true);
+    this.win.removeEventListener("keydown", this.onKeyMaster, true);
+    this.win.removeEventListener("mousemove", this.onArmedMouseMoveMaster, true);
+    this.win.removeEventListener("mousedown", this.onArmedMouseDown, true);
+    this.win.removeEventListener("pointerdown", this.onOverlayPointerStartMaster, true);
+    this.win.removeEventListener("touchstart", this.onOverlayPointerStartMaster, true);
+    this.win.removeEventListener("click", this.onOverlayClickMaster, true);
+    this.win.removeEventListener("wheel", this.onScrollLock, true);
+    this.win.removeEventListener("touchmove", this.onScrollLock, true);
+    this.win.removeEventListener("pointermove", this.onMouseMove, true);
+    this.win.removeEventListener("pointerup", this.onMouseUp, true);
+    this.win.removeEventListener("mousemove", this.onMouseMove, true);
+    this.win.removeEventListener("mouseup", this.onMouseUp, true);
+    this.win.removeEventListener("click", this.onSuppressClick, true);
+    for (const t of CONTAINED) this.win.removeEventListener(t, this.onEventMaster, true);
   }
 
   // The marquee and preview panel are positioned in viewport coordinates, so
@@ -1089,7 +1132,7 @@ export class LoupeOverlay {
 
   private mountEditingFrame(): Document | null {
     if (!this.root) return null;
-    const frame = document.createElement("iframe");
+    const frame = this.doc.createElement("iframe");
     frame.setAttribute("title", "Loupe annotation editor");
     frame.setAttribute("aria-label", "Loupe annotation editor");
     frame.setAttribute("allowtransparency", "true");
@@ -1169,9 +1212,18 @@ export class LoupeOverlay {
     }
     // While recording, the user is driving the real app — let page events through.
     if (this.phase === "recording") return;
+    // Scoped mode: gestures outside the container belong to the surrounding UI.
+    if (this.phase === "armed" && !this.eventInScope(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    if (this.phase !== "armed" || typeof PointerEvent === "undefined" || !(e instanceof PointerEvent) || e.button !== 0) return;
+    // Test against the overlay's own realm's PointerEvent: when running inside an
+    // iframe, `PointerEvent` (this module's realm) differs from the one the event
+    // was constructed with, so a bare `instanceof PointerEvent` is always false —
+    // which silently swallowed every click inside the prototype.
+    const PointerEventCtor = this.win.PointerEvent;
+    if (this.phase !== "armed" || typeof PointerEventCtor === "undefined" || !(e instanceof PointerEventCtor) || (e as PointerEvent).button !== 0) {
+      return;
+    }
     this.onMouseDown(e);
   };
 
@@ -1205,7 +1257,7 @@ export class LoupeOverlay {
       target: describeEventTarget(target),
       retargetedTarget: describeEventTarget(e.target),
       path: path.slice(0, 8).map(describeEventTarget),
-      documentActive: describeEventTarget(document.activeElement),
+      documentActive: describeEventTarget(this.doc.activeElement),
       shadowActive: describeEventTarget(this.root?.activeElement ?? null),
       isTextEntry: isTextEntryTarget(e),
     });

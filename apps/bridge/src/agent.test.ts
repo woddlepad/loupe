@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { codexBackgroundAgent, defaultAgents, defaultCodexAppServerSocketPath, type AgentCommand } from "./config.js";
-import { agentAvailable, buildCodexUrl, buildDreamLaunchPrompt, expandAgentArgv } from "./actions/agent.js";
+import {
+  agentAvailable,
+  buildCodexUrl,
+  buildDreamFeedbackPrompt,
+  buildDreamLaunchPrompt,
+  expandAgentArgv,
+} from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
 import type { DreamDetail } from "./dreams.js";
 
@@ -253,6 +259,71 @@ test("builds Dreamer implementation launch prompt with goal and ship-feature", (
   assert.match(prompt, /This is an implementation launch, not a request to create another dream/);
   assert.match(prompt, /\.loupe\/dreams\/notes-as-layouts\/plan\.mdx/);
   assert.match(prompt, /\.loupe\/dreams\/notes-as-layouts\/report\.md/);
+});
+
+test("builds Dreamer feedback prompt anchored to the highlighted spot", () => {
+  const dream: DreamDetail = {
+    id: "notes-as-layouts",
+    title: "Notes as Layouts",
+    status: "planned",
+    createdAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:00.000Z",
+    dir: ".loupe/dreams/notes-as-layouts",
+    files: { plan: "plan.mdx", images: [] },
+    content: { plan: "# Notes as Layouts\n" },
+  };
+
+  const prompt = buildDreamFeedbackPrompt(dream, {
+    id: "fb-test-1234",
+    relPath: ".loupe/dreams/notes-as-layouts/feedback/fb-test-1234.md",
+    absPath: "/tmp/fb-test-1234.md",
+    input: {
+      note: "Split this phase into two milestones",
+      tab: "plan",
+      targetFile: "plan.mdx",
+      anchor: { kind: "markdown", heading: "Implementation Plan", headingLevel: 2, quote: "Phase 1", tag: "li" },
+    },
+  });
+
+  assert.match(prompt, /human feedback on a Loupe Dreamer plan/);
+  assert.match(prompt, /"Notes as Layouts"/);
+  assert.match(prompt, /NOT an implementation launch and NOT a request to create another dream/);
+  assert.match(prompt, /Dream dir: \.loupe\/dreams\/notes-as-layouts/);
+  assert.match(prompt, /Artifact under feedback: \.loupe\/dreams\/notes-as-layouts\/plan\.mdx \(the "plan" tab\)/);
+  assert.match(prompt, /Feedback file \(full anchor detail\): \.loupe\/dreams\/notes-as-layouts\/feedback\/fb-test-1234\.md/);
+  assert.match(prompt, /Anchored at: section "Implementation Plan" \(h2\) → <li> "Phase 1"/);
+  assert.match(prompt, /Note: "Split this phase into two milestones"/);
+  assert.match(prompt, /do not modify dream\.json/);
+  assert.doesNotMatch(prompt, /^\/goal/);
+  assert.doesNotMatch(prompt, /ship-feature/);
+});
+
+test("feedback prompt handles a note-less highlight", () => {
+  const dream: DreamDetail = {
+    id: "notes-as-layouts",
+    title: "Notes as Layouts",
+    status: "planned",
+    createdAt: "2026-07-03T00:00:00.000Z",
+    updatedAt: "2026-07-03T00:00:00.000Z",
+    dir: ".loupe/dreams/notes-as-layouts",
+    files: { plan: "plan.mdx", prototypeHtml: "prototype.html", images: [] },
+    content: {},
+  };
+
+  const prompt = buildDreamFeedbackPrompt(dream, {
+    id: "fb-test-5678",
+    relPath: ".loupe/dreams/notes-as-layouts/feedback/fb-test-5678.md",
+    absPath: "/tmp/fb-test-5678.md",
+    input: {
+      note: "  ",
+      tab: "prototype",
+      targetFile: "prototype.html",
+      anchor: { kind: "iframe", tag: "button", quote: "Book now", selector: "main button", iframeRect: { x: 10, y: 20, width: 100, height: 50 } },
+    },
+  });
+
+  assert.match(prompt, /Note: \(none — the highlight itself is the feedback\)/);
+  assert.match(prompt, /Anchored at: <button> "Book now" inside the prototype\.html prototype \(selector main button\)/);
 });
 
 function restoreEnv(name: string, value: string | undefined): void {

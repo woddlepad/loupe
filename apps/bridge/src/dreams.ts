@@ -8,6 +8,8 @@ const CANVAS_FILE = "canvas.mdx";
 const PROTOTYPE_FILE = "prototype.mdx";
 const PROTOTYPE_HTML = "prototype.html";
 const REPORT_FILE = "report.md";
+// Subdirectory for anchored feedback captures; invisible to dreamFiles()/tabs.
+const FEEDBACK_DIR = "feedback";
 export const MAX_DREAM_GOAL_CHARS = 4000;
 
 export type DreamStatus = "planned" | "approved" | "running" | "needs_review" | "done";
@@ -67,6 +69,58 @@ export interface DreamWriteInput {
   canvas?: string;
   prototype?: string;
   report?: string;
+}
+
+export type DreamFeedbackTab = "plan" | "canvas" | "prototype" | "report";
+
+export interface DreamFeedbackRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where in the rendered dream the reviewer highlighted. "iframe" means inside
+ * the prototype (a real prototype element, captured from within the iframe).
+ */
+export interface DreamFeedbackAnchor {
+  kind: "markdown" | "image" | "iframe" | "element";
+  /** Nearest preceding heading text (markdown tabs). */
+  heading?: string;
+  headingLevel?: number;
+  /** Highlighted element's text, trimmed. */
+  quote?: string;
+  /** Best-effort CSS selector inside the rendered view / prototype. */
+  selector?: string;
+  tag?: string;
+  /** Gallery image filename (canvas tab). */
+  image?: string;
+  /** Drawn selection in viewport CSS px. */
+  rect?: DreamFeedbackRect;
+  /** Element rect within the prototype iframe's own viewport (kind "iframe"). */
+  iframeRect?: DreamFeedbackRect;
+  iframeSize?: { width: number; height: number };
+  /** Prototype iframe's internal scroll offset at capture time. */
+  iframeScroll?: { x: number; y: number };
+}
+
+export interface DreamFeedbackInput {
+  note: string;
+  tab: DreamFeedbackTab;
+  /** Artifact the feedback anchors to, e.g. "plan.mdx" or "prototype.html". */
+  targetFile?: string;
+  url?: string;
+  anchor: DreamFeedbackAnchor;
+  createdAt?: string;
+}
+
+export interface WrittenDreamFeedback {
+  id: string;
+  /** Repo-relative path, e.g. ".loupe/dreams/<slug>/feedback/<id>.md". */
+  relPath: string;
+  absPath: string;
+  input: DreamFeedbackInput;
 }
 
 export function listDreams(repoRoot: string): DreamSummary[] {
@@ -150,6 +204,106 @@ export function dreamAssetPath(repoRoot: string, id: string, relPath: string): s
   const target = resolve(dir, relPath);
   if (!isWithin(dir, target) || !existsSync(target)) return undefined;
   return target;
+}
+
+/** Persist an anchored feedback capture under the dream's feedback/ subdir. */
+export function writeDreamFeedback(repoRoot: string, dreamId: string, input: DreamFeedbackInput): WrittenDreamFeedback {
+  const dir = safeDreamPath(repoRoot, dreamId);
+  if (!dir || !existsSync(dir)) throw new Error(`dream ${dreamId} not found`);
+  const feedbackDir = join(dir, FEEDBACK_DIR);
+  mkdirSync(feedbackDir, { recursive: true });
+  const id = feedbackId();
+  const stamped: DreamFeedbackInput = { ...input, createdAt: input.createdAt ?? new Date().toISOString() };
+  const absPath = join(feedbackDir, `${id}.md`);
+  writeFileSync(absPath, renderFeedbackMarkdown(basename(dir), id, stamped));
+  return {
+    id,
+    relPath: join(DREAMS_ROOT, basename(dir), FEEDBACK_DIR, `${id}.md`),
+    absPath,
+    input: stamped,
+  };
+}
+
+/** One-line description of the anchor, shared by the feedback file and prompt. */
+export function anchorSummary(input: DreamFeedbackInput): string {
+  const a = input.anchor;
+  const element = [a.tag ? `<${a.tag}>` : "", a.quote ? `"${singleLine(a.quote)}"` : ""].filter(Boolean).join(" ");
+  if (a.kind === "iframe") {
+    const target = input.targetFile ?? "prototype.html";
+    // The overlay runs inside the prototype iframe, so we usually have a real
+    // element; fall back to a region only when nothing was captured.
+    const where = `inside the ${target} prototype`;
+    if (element) return `${element} ${where}${a.selector ? ` (selector ${a.selector})` : ""}`;
+    return a.iframeRect ? `region ${formatRect(a.iframeRect)} ${where}` : `the ${target} prototype`;
+  }
+  if (a.kind === "image") {
+    const name = a.image ?? input.targetFile ?? "(unknown image)";
+    return a.rect ? `image ${name} (viewport region ${formatRect(a.rect)})` : `image ${name}`;
+  }
+  if (a.kind === "markdown") {
+    const parts = [
+      a.heading ? `section "${singleLine(a.heading)}"${a.headingLevel ? ` (h${a.headingLevel})` : ""}` : "",
+      element,
+    ].filter(Boolean);
+    return parts.join(" → ") || "the rendered markdown";
+  }
+  return [element, a.selector ? `(selector ${a.selector})` : ""].filter(Boolean).join(" ") || "the rendered view";
+}
+
+function renderFeedbackMarkdown(dreamSlugName: string, id: string, input: DreamFeedbackInput): string {
+  const a = input.anchor;
+  const frontmatter = [
+    `id: ${id}`,
+    `dream: ${dreamSlugName}`,
+    `tab: ${input.tab}`,
+    ...(input.targetFile ? [`target: ${input.targetFile}`] : []),
+    `createdAt: ${input.createdAt}`,
+    ...(input.url ? [`url: ${input.url}`] : []),
+  ];
+  const anchorLines = [
+    `- Artifact: ${input.targetFile ?? "(unknown)"} (rendered on the "${tabTitle(input.tab)}" tab)`,
+    ...(a.kind === "iframe" ? [`- Location: inside the prototype iframe`] : []),
+    ...(a.heading ? [`- Section: "${singleLine(a.heading)}"${a.headingLevel ? ` (h${a.headingLevel})` : ""}`] : []),
+    ...(a.tag || a.quote
+      ? [`- Element: ${a.tag ? `<${a.tag}>` : "(unknown)"}${a.quote ? ` — "${singleLine(a.quote)}"` : ""}`]
+      : []),
+    ...(a.image ? [`- Image: ${a.image}`] : []),
+    ...(a.selector ? [`- Selector: \`${a.selector}\``] : []),
+    ...(a.rect ? [`- Viewport rect: ${formatRect(a.rect)}`] : []),
+    ...(a.iframeRect ? [`- Iframe rect: ${formatRect(a.iframeRect)}`] : []),
+    ...(a.iframeSize ? [`- Iframe viewport: ${Math.round(a.iframeSize.width)}×${Math.round(a.iframeSize.height)}`] : []),
+    ...(a.iframeScroll ? [`- Iframe internal scroll: x=${Math.round(a.iframeScroll.x)} y=${Math.round(a.iframeScroll.y)}`] : []),
+  ];
+  return [
+    "---",
+    ...frontmatter,
+    "---",
+    "",
+    "# Dream feedback",
+    "",
+    input.note.trim() || "(no note — the highlight itself is the feedback)",
+    "",
+    "## Anchor",
+    "",
+    ...anchorLines,
+    "",
+  ].join("\n");
+}
+
+function feedbackId(): string {
+  return `fb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function formatRect(rect: DreamFeedbackRect): string {
+  return `x=${Math.round(rect.x)} y=${Math.round(rect.y)} ${Math.round(rect.width)}×${Math.round(rect.height)}`;
+}
+
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function tabTitle(tab: DreamFeedbackTab): string {
+  return tab[0]!.toUpperCase() + tab.slice(1);
 }
 
 function readDreamSummary(repoRoot: string, id: string): DreamSummary | undefined {

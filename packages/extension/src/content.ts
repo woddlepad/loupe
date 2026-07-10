@@ -777,7 +777,26 @@ interface FrameworkInspectResponse {
   componentChain?: ComponentRef[];
 }
 
+/**
+ * Loupe's own Dreamer UI (served by the bridge) ships a native, dream-aware
+ * correction overlay on Alt+A. The extension's app-annotation overlay would only
+ * compete there, so it stays out of the way entirely.
+ */
+function isLoupeDreamerSurface(): boolean {
+  return !!document.querySelector('meta[name="loupe-surface"][content="dreamer"]');
+}
+
 chrome.runtime.onMessage.addListener((msg: LoupeMessage) => {
+  if (isLoupeDreamerSurface()) {
+    // The Dreamer page has its own native, dream-aware correction overlay. Chrome
+    // consumes the Alt+A accelerator (a chrome.commands shortcut) before the page
+    // can ever see the keydown, so forward the toggle to the page instead of
+    // opening the extension's own overlay.
+    if (msg.type === "toggle" || msg.type === "toggle-frozen") {
+      window.dispatchEvent(new CustomEvent("loupe:toggle-corrections"));
+    }
+    return;
+  }
   if (msg.type === "toggle") void toggleAnnotate();
   if (msg.type === "toggle-frozen") void toggleFrozenAnnotate();
   if (msg.type === "toggle-view") toggleView();

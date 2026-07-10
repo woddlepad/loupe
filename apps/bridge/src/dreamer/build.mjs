@@ -12,3 +12,8 @@ execFileSync(tailwindCli, ["-i", resolve(here, "styles.css"), "-o", resolve(root
   cwd: root,
   stdio: "inherit",
 });
+// Overlay sheet for the feedback LoupeOverlay (shadow root + panel iframe).
+execFileSync(tailwindCli, ["-i", resolve(here, "overlay.css"), "-o", resolve(root, "dist/dreamer-overlay.css")], {
+  cwd: root,
+  stdio: "inherit",
+});

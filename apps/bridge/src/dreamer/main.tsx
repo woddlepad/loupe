@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Crosshair,
   ExternalLink,
   GitBranch,
   ImageIcon,
@@ -40,6 +41,7 @@ import {
   Textarea,
   cn,
 } from "@loupe/ui";
+import { LoupeOverlay, captureTarget as captureAnnotationTarget, type Annotation } from "@loupe/core";
 
 type DreamStatus = "planned" | "approved" | "running" | "needs_review" | "done";
 
@@ -133,6 +135,41 @@ type LaunchState =
   | { kind: "ok"; message: string }
   | { kind: "error"; message: string };
 
+interface FeedbackRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Client mirror of the bridge's DreamFeedbackAnchor. */
+interface FeedbackAnchor {
+  kind: "markdown" | "image" | "iframe" | "element";
+  heading?: string;
+  headingLevel?: number;
+  quote?: string;
+  selector?: string;
+  tag?: string;
+  image?: string;
+  rect?: FeedbackRect;
+  iframeRect?: FeedbackRect;
+  iframeSize?: { width: number; height: number };
+  iframeScroll?: { x: number; y: number };
+}
+
+interface FeedbackInput {
+  note: string;
+  tab: VisualTab;
+  targetFile?: string;
+  url?: string;
+  anchor: FeedbackAnchor;
+  createdAt?: string;
+}
+
+// "prototype" → overlay ran inside the iframe (real element); "content" → scoped
+// to the dream content pane on the top document.
+type FeedbackScope = "prototype" | "content";
+
 const MAX_GOAL_CHARS = 4000;
 
 const PLAN_FILTER_OPTIONS: { label: string; value: PlanFilter }[] = [
@@ -198,6 +235,11 @@ function App() {
   const [selectedSettings, setSelectedSettings] = React.useState<Record<string, ActionRunSettings>>(() => readStoredSettingsSelections());
   const [autosaveState, setAutosaveState] = React.useState<AutosaveState>({ kind: "clean" });
   const [loading, setLoading] = React.useState(true);
+  const [feedbackActive, setFeedbackActive] = React.useState(false);
+  const feedbackOverlayRef = React.useRef<LoupeOverlay | null>(null);
+  const feedbackTargetElRef = React.useRef<Element | null>(null);
+  const prototypeIframeRef = React.useRef<HTMLIFrameElement | null>(null);
+  const contentPaneRef = React.useRef<HTMLDivElement | null>(null);
 
   const selectedPlan = React.useMemo(
     () => plans.find((plan) => plan.id === selectedPlanId) ?? plans[0],
@@ -429,6 +471,86 @@ function App() {
     setLaunchState({ kind: "ok", message: "Copied launch prompt" });
   }
 
+  async function toggleFeedback() {
+    if (feedbackOverlayRef.current?.active) {
+      feedbackOverlayRef.current.disable();
+      return;
+    }
+    if (!selectedDetail || draft) return;
+    // Freeze the dream + tab at arm time so the anchor matches what's on screen.
+    const dream = selectedDetail;
+    const tab = activeVisualTab;
+    const { root, scope } = feedbackRoot(dream, tab);
+    if (!root) {
+      setLaunchState({ kind: "error", message: "Nothing to annotate on this tab yet." });
+      return;
+    }
+    const stylesheet = await loadOverlayStylesheet();
+    const overlay = new LoupeOverlay({
+      actions: [{ id: "save", label: "Save feedback" }, ...actions],
+      stylesheet,
+      showGroup: false,
+      showRefs: false,
+      // Prototype → run inside the (same-origin) iframe so real prototype elements
+      // are selectable and it works in fullscreen; other tabs → scope to the dream
+      // content pane so the surrounding dreamer UI stays clickable.
+      root,
+      captureTarget: (element) => {
+        feedbackTargetElRef.current = element;
+        return captureAnnotationTarget(element);
+      },
+      onSubmit: (annotation, actionIds, actionModels) =>
+        submitFeedback(dream, tab, scope, annotation, actionIds, actionModels),
+      onDisable: () => setFeedbackActive(false),
+    });
+    feedbackOverlayRef.current = overlay;
+    setFeedbackActive(true);
+    setLaunchState({ kind: "idle" });
+    overlay.enable();
+  }
+
+  /** Pick where the correction overlay lives for the active tab. */
+  function feedbackRoot(dream: DreamDetail, tab: VisualTab): { root: HTMLElement | null; scope: FeedbackScope } {
+    if (tab === "prototype" && dream.files.prototypeHtml) {
+      const body = prototypeIframeBody(prototypeIframeRef.current);
+      if (body) return { root: body, scope: "prototype" };
+    }
+    return { root: contentPaneRef.current, scope: "content" };
+  }
+
+  async function submitFeedback(
+    dream: DreamDetail,
+    tab: VisualTab,
+    scope: FeedbackScope,
+    annotation: Annotation,
+    actionIds: string[],
+    actionModels?: Record<string, string>,
+  ) {
+    const response = await fetch(apiUrl(`/dreams/${encodeURIComponent(dream.id)}/feedback`), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        feedback: buildFeedback(dream, tab, scope, annotation, feedbackTargetElRef.current),
+        actions: actionIds,
+        actionModels,
+      }),
+    });
+    const result = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      path?: string;
+      detail?: string;
+      error?: string;
+    };
+    // Throwing keeps the overlay panel open with the error message.
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.error ?? result.detail ?? "Could not save feedback");
+    }
+    setLaunchState({
+      kind: "ok",
+      message: result.detail ?? (result.path ? `Saved feedback → ${result.path}` : "Saved feedback"),
+    });
+  }
+
   function chooseModel(actionId: string, model: string) {
     setSelectedModels((current) => {
       const next = defaultModels(actions, { ...current, [actionId]: model });
@@ -485,6 +607,35 @@ function App() {
 
   const visualTabs = selectedDetail ? tabsForDetail(selectedDetail) : ["plan" as const];
   const activeVisualTab = visualTabs.includes(activeTab) ? activeTab : visualTabs[0]!;
+
+  // Dismiss the feedback overlay whenever its anchor context goes away.
+  React.useEffect(() => {
+    feedbackOverlayRef.current?.disable();
+  }, [selectedPlan?.id, activeVisualTab, mode, isEditing]);
+  React.useEffect(() => () => feedbackOverlayRef.current?.destroy(), []);
+
+  // Alt+A toggles corrections. Keep a ref to the latest closure so the one-time
+  // window listener (and the prototype iframe's, for fullscreen) stays current.
+  const toggleFeedbackRef = React.useRef(toggleFeedback);
+  toggleFeedbackRef.current = toggleFeedback;
+  const handleFeedbackHotkey = React.useCallback(() => void toggleFeedbackRef.current(), []);
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isFeedbackHotkey(e) || isTextEntry(e.target)) return;
+      e.preventDefault();
+      handleFeedbackHotkey();
+    };
+    // When the Loupe extension is installed it owns the Alt+A accelerator (Chrome
+    // consumes it before the page sees a keydown), so it forwards the toggle here.
+    // The raw keydown still covers the no-extension case.
+    const onExtensionToggle = () => handleFeedbackHotkey();
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("loupe:toggle-corrections", onExtensionToggle);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("loupe:toggle-corrections", onExtensionToggle);
+    };
+  }, [handleFeedbackHotkey]);
 
   return (
     <main className="h-svh overflow-hidden bg-background text-foreground">
@@ -605,16 +756,29 @@ function App() {
                           </div>
                           <div className="flex items-center justify-between gap-2">
                             <AutosaveStatus state={{ kind: "clean" }} />
-                            <PlanActionsMenu
-                              canDelete={Boolean(selectedPlan)}
-                              canEdit={Boolean(selectedPlan)}
-                              canCopy={Boolean(selectedPlan)}
-                              canReset={selectedPlan?.status === "running"}
-                              onCopy={copySelectedPlanPrompt}
-                              onDelete={deleteSelectedPlan}
-                              onEdit={beginEditPlan}
-                              onReset={resetSelectedPlanLaunch}
-                            />
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                className="gap-1.5"
+                                disabled={!selectedDetail}
+                                onClick={() => void toggleFeedback()}
+                                size="sm"
+                                type="button"
+                                variant={feedbackActive ? "default" : "outline"}
+                              >
+                                <Crosshair className="size-3.5" />
+                                {feedbackActive ? "Cancel feedback" : "Give feedback"}
+                              </Button>
+                              <PlanActionsMenu
+                                canDelete={Boolean(selectedPlan)}
+                                canEdit={Boolean(selectedPlan)}
+                                canCopy={Boolean(selectedPlan)}
+                                canReset={selectedPlan?.status === "running"}
+                                onCopy={copySelectedPlanPrompt}
+                                onDelete={deleteSelectedPlan}
+                                onEdit={beginEditPlan}
+                                onReset={resetSelectedPlanLaunch}
+                              />
+                            </div>
                           </div>
                           <StatusMessage
                             state={
@@ -628,11 +792,18 @@ function App() {
                     )}
                   </div>
 
-                  <div className="min-h-0 overflow-hidden">
+                  <div className="min-h-0 overflow-hidden" ref={contentPaneRef}>
                     {draft && activeDraft ? (
                       <PlanEditor draft={activeDraft} setDraft={updateDraft} />
                     ) : selectedDetail ? (
-                      <VisualContent detail={selectedDetail} repoRootParam={repoRootParam} tab={activeVisualTab} />
+                      <VisualContent
+                        detail={selectedDetail}
+                        feedbackActive={feedbackActive}
+                        onFeedbackHotkey={handleFeedbackHotkey}
+                        prototypeIframeRef={prototypeIframeRef}
+                        repoRootParam={repoRootParam}
+                        tab={activeVisualTab}
+                      />
                     ) : (
                       <PlanMarkdown markdown="Loading plan..." />
                     )}
@@ -890,10 +1061,16 @@ function TextField({
 
 function VisualContent({
   detail,
+  feedbackActive,
+  onFeedbackHotkey,
+  prototypeIframeRef,
   repoRootParam,
   tab,
 }: {
   detail: DreamDetail;
+  feedbackActive: boolean;
+  onFeedbackHotkey: () => void;
+  prototypeIframeRef: React.RefObject<HTMLIFrameElement | null>;
   repoRootParam: string | undefined;
   tab: VisualTab;
 }) {
@@ -918,6 +1095,9 @@ function VisualContent({
     if (detail.files.prototypeHtml) {
       return (
         <PrototypeFrame
+          feedbackActive={feedbackActive}
+          onFeedbackHotkey={onFeedbackHotkey}
+          prototypeIframeRef={prototypeIframeRef}
           src={assetUrl(detail.id, detail.files.prototypeHtml, repoRootParam)}
           title={`${detail.title} prototype`}
         />
@@ -929,11 +1109,33 @@ function VisualContent({
   return <PlanMarkdown markdown={detail.content.plan ?? ""} />;
 }
 
-function PrototypeFrame({ src, title }: { src: string; title: string }) {
+function PrototypeFrame({
+  src,
+  title,
+  feedbackActive,
+  onFeedbackHotkey,
+  prototypeIframeRef,
+}: {
+  src: string;
+  title: string;
+  feedbackActive: boolean;
+  onFeedbackHotkey: () => void;
+  prototypeIframeRef: React.RefObject<HTMLIFrameElement | null>;
+}) {
   const frameRef = React.useRef<HTMLIFrameElement>(null);
   const shellRef = React.useRef<HTMLDivElement>(null);
   const frameClickCleanupRef = React.useRef<(() => void) | null>(null);
+  const hotkeyCleanupRef = React.useRef<(() => void) | null>(null);
   const [fullscreen, setFullscreen] = React.useState(false);
+
+  // Share the iframe element with the feedback overlay's anchor computation.
+  const attachFrame = React.useCallback(
+    (element: HTMLIFrameElement | null) => {
+      frameRef.current = element;
+      prototypeIframeRef.current = element;
+    },
+    [prototypeIframeRef],
+  );
 
   const requestPrototypeFullscreen = React.useCallback(async () => {
     const shell = shellRef.current;
@@ -954,6 +1156,9 @@ function PrototypeFrame({ src, title }: { src: string; title: string }) {
   }, [requestPrototypeFullscreen]);
 
   const connectFrameClick = React.useCallback(() => {
+    // While a correction is armed the overlay runs inside this iframe and owns
+    // clicks (element picking) — don't also toggle fullscreen on them.
+    if (feedbackActive) return undefined;
     const frame = frameRef.current;
     let frameDocument: Document | null | undefined;
     try {
@@ -971,15 +1176,48 @@ function PrototypeFrame({ src, title }: { src: string; title: string }) {
     const cleanup = () => frameDocument.removeEventListener("click", onClick, true);
     frameClickCleanupRef.current = cleanup;
     return cleanup;
-  }, [requestPrototypeFullscreen]);
+  }, [requestPrototypeFullscreen, feedbackActive]);
+
+  // Alt+A fires on the iframe's own window while focus is inside the prototype
+  // (notably in fullscreen, where the top window never sees it).
+  const connectHotkey = React.useCallback(() => {
+    hotkeyCleanupRef.current?.();
+    hotkeyCleanupRef.current = null;
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!isFeedbackHotkey(e) || isTextEntry(e.target)) return;
+      e.preventDefault();
+      onFeedbackHotkey();
+    };
+    try {
+      win.addEventListener("keydown", onKey, true);
+      hotkeyCleanupRef.current = () => {
+        try {
+          win.removeEventListener("keydown", onKey, true);
+        } catch {
+          // The iframe window may already be gone.
+        }
+      };
+    } catch {
+      // Cross-origin prototype — hotkey stays on the top window only.
+    }
+  }, [onFeedbackHotkey]);
 
   React.useEffect(() => {
+    // Re-run when feedback arms/disarms so the fullscreen click handler detaches
+    // while armed and reattaches after.
+    frameClickCleanupRef.current?.();
+    frameClickCleanupRef.current = null;
     connectFrameClick();
+    connectHotkey();
     return () => {
       frameClickCleanupRef.current?.();
       frameClickCleanupRef.current = null;
+      hotkeyCleanupRef.current?.();
+      hotkeyCleanupRef.current = null;
     };
-  }, [connectFrameClick, src]);
+  }, [connectFrameClick, connectHotkey, src]);
 
   React.useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === shellRef.current);
@@ -995,8 +1233,9 @@ function PrototypeFrame({ src, title }: { src: string; title: string }) {
         className="dreamer-prototype-frame"
         onLoad={() => {
           connectFrameClick();
+          connectHotkey();
         }}
-        ref={frameRef}
+        ref={attachFrame}
         src={src}
         title={title}
       />
@@ -1746,6 +1985,131 @@ function assetUrl(id: string, path: string, repoRootParam: string | undefined): 
   url.searchParams.set("path", path);
   if (repoRootParam) url.searchParams.set("repoRoot", repoRootParam);
   return url.toString();
+}
+
+let overlayStylesheetPromise: Promise<string> | null = null;
+
+/** Compiled overlay sheet (built from dreamer/overlay.css), fetched lazily on first arm. */
+function loadOverlayStylesheet(): Promise<string> {
+  overlayStylesheetPromise ??= fetch("/dreamer/assets/dreamer-overlay.css")
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.text();
+    })
+    .catch((error: unknown) => {
+      // Core falls back to its minimal built-in styles; allow a retry on the next arm.
+      console.warn("[dreamer] overlay stylesheet unavailable", error);
+      overlayStylesheetPromise = null;
+      return "";
+    });
+  return overlayStylesheetPromise;
+}
+
+/** Map the captured annotation to a dream-anchored feedback payload. */
+function buildFeedback(
+  dream: DreamDetail,
+  tab: VisualTab,
+  scope: FeedbackScope,
+  annotation: Annotation,
+  targetEl: Element | null,
+): FeedbackInput {
+  const base = {
+    note: annotation.note,
+    tab,
+    url: annotation.url,
+    createdAt: annotation.createdAt,
+  };
+  const elementAnchor = {
+    quote: annotation.target.text || undefined,
+    selector: annotation.target.selector,
+    tag: annotation.target.tag,
+    rect: annotation.rect,
+  };
+
+  // Prototype: the overlay ran inside the (same-origin) iframe, so the target is
+  // a real prototype element with its own selector/text; the rect + scroll are
+  // already iframe-relative (annotation.scroll came from the iframe window).
+  if (scope === "prototype") {
+    return {
+      ...base,
+      targetFile: dream.files.prototypeHtml,
+      anchor: {
+        kind: "iframe",
+        ...elementAnchor,
+        iframeRect: annotation.rect,
+        ...(annotation.scroll && (annotation.scroll.x !== 0 || annotation.scroll.y !== 0)
+          ? { iframeScroll: annotation.scroll }
+          : {}),
+      },
+    };
+  }
+
+  // Canvas gallery images: the figcaption text is the exact filename.
+  const caption = targetEl?.closest("figure")?.querySelector("figcaption")?.textContent?.trim();
+  if (caption && dream.files.images.includes(caption)) {
+    return {
+      ...base,
+      targetFile: caption,
+      anchor: { kind: "image", image: caption, rect: annotation.rect },
+    };
+  }
+
+  const article = targetEl?.closest("article.markdown-body");
+  if (article && targetEl) {
+    const heading = nearestHeading(article, targetEl);
+    return {
+      ...base,
+      targetFile: markdownFileForTab(dream, tab),
+      anchor: {
+        kind: "markdown",
+        ...(heading ? { heading: heading.text, headingLevel: heading.level } : {}),
+        ...elementAnchor,
+      },
+    };
+  }
+  return {
+    ...base,
+    targetFile: markdownFileForTab(dream, tab),
+    anchor: { kind: "element", ...elementAnchor },
+  };
+}
+
+/** Same-origin prototype iframe body, or null if not loaded / cross-origin. */
+function prototypeIframeBody(iframe: HTMLIFrameElement | null): HTMLElement | null {
+  try {
+    return iframe?.contentDocument?.body ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Alt+A (no other modifier) — the corrections toggle. */
+function isFeedbackHotkey(e: KeyboardEvent): boolean {
+  return e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "a" || e.key === "A");
+}
+
+function isTextEntry(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+
+/** Nearest heading at or before the element, in rendered document order. */
+function nearestHeading(article: Element, el: Element): { text: string; level: number } | undefined {
+  let nearest: Element | undefined;
+  for (const heading of article.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
+    if (heading.contains(el) || heading.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
+      nearest = heading;
+    }
+  }
+  const text = nearest?.textContent?.trim();
+  return nearest && text ? { text, level: Number(nearest.tagName[1]) } : undefined;
+}
+
+function markdownFileForTab(dream: DreamDetail, tab: VisualTab): string | undefined {
+  if (tab === "canvas") return dream.files.canvas;
+  if (tab === "prototype") return dream.files.prototype ?? dream.files.prototypeHtml;
+  if (tab === "report") return dream.files.report ?? "report.md";
+  return dream.files.plan ?? "plan.mdx";
 }
 
 const CLAUDE_LOGO_SVG =

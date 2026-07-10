@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createConnection, type Socket } from "node:net";
 import type { Annotation } from "@loupe/core/model";
 import { defaultCodexAppServerSocketPath, type AgentCommand, type BridgeConfig } from "../config.js";
-import type { DreamDetail } from "../dreams.js";
+import { anchorSummary, type DreamDetail, type WrittenDreamFeedback } from "../dreams.js";
 import type { WrittenBundle } from "../bundle.js";
 import type { SourceResolution } from "../resolve/index.js";
 import type { StoredAnnotation } from "../store.js";
@@ -33,13 +33,13 @@ export function agentActions(config: BridgeConfig): Action[] {
           ? sessionOutcome(name, ctx)
           : cmd.mode === "codex-app-server"
             ? openCodexAppServer(
-                name,
-                cmd,
-                ctx.config.repoRoot,
-                `/loupe ${ctx.annotation.id}`,
-                selectedModel(cmd, ctx.selectedModel),
-                selectedSpeed(cmd, ctx.selectedSettings?.speed),
-              )
+              name,
+              cmd,
+              ctx.config.repoRoot,
+              `/loupe ${ctx.annotation.id}`,
+              selectedModel(cmd, ctx.selectedModel),
+              selectedSpeed(cmd, ctx.selectedSettings?.speed),
+            )
             : cmd.mode === "codex-app"
               ? openCodexApp(name, ctx.config.repoRoot, `/loupe ${ctx.annotation.id}`, selectedModel(cmd, ctx.selectedModel))
               : runAgent(name, cmd, ctx),
@@ -139,6 +139,53 @@ export function runDreamAgent(
   if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, launchPrompt, chosenModel, chosenSpeed);
   if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, launchPrompt, chosenModel);
   return spawnAgent(name, cmd, config.repoRoot, launchPrompt, launchPrompt, undefined, [], logPath, chosenModel, chosenSpeed);
+}
+
+/** Run one configured bridge agent against anchored feedback on a saved dream. */
+export function runDreamFeedbackAgent(
+  name: string,
+  cmd: AgentCommand,
+  config: BridgeConfig,
+  dream: DreamDetail,
+  feedback: WrittenDreamFeedback,
+  logPath: string,
+  model?: string,
+): ActionOutcome | Promise<ActionOutcome> {
+  const chosenModel = selectedModel(cmd, model);
+  const prompt = buildDreamFeedbackPrompt(dream, feedback);
+  if (cmd.mode === "session") {
+    return {
+      ok: true,
+      detail: `feedback saved to ${feedback.relPath} — pick it up in your open ${name} session`,
+    };
+  }
+  if (cmd.mode === "codex-app-server") return openCodexAppServer(name, cmd, config.repoRoot, prompt, chosenModel);
+  if (cmd.mode === "codex-app") return openCodexApp(name, config.repoRoot, prompt, chosenModel);
+  return spawnAgent(name, cmd, config.repoRoot, prompt, prompt, undefined, [], logPath, chosenModel);
+}
+
+export function buildDreamFeedbackPrompt(dream: DreamDetail, feedback: WrittenDreamFeedback): string {
+  const input = feedback.input;
+  const targetFile = input.targetFile ?? dream.files.plan ?? "plan.mdx";
+  const note = input.note.trim();
+
+  return [
+    `You're picking up human feedback on a Loupe Dreamer plan — the reviewer highlighted a spot in the rendered dream "${dream.title}" and left a note. Revise the dream's artifacts to address it.`,
+    "This is feedback on the plan/prototype artifacts, NOT an implementation launch and NOT a request to create another dream.",
+    "",
+    `Dream dir: ${dream.dir}`,
+    `Artifact under feedback: ${dream.dir}/${targetFile} (the "${input.tab}" tab)`,
+    `Feedback file (full anchor detail): ${feedback.relPath}`,
+    `Anchored at: ${anchorSummary(input)}`,
+    "",
+    note ? `Note: "${note}"` : "Note: (none — the highlight itself is the feedback)",
+    "",
+    `Read the feedback file and the artifact, then update the dream artifacts in ${dream.dir} (plan.mdx / canvas.mdx / prototype.html / report.md) so the note is addressed at the anchored spot.`,
+    "Keep each artifact's format and frontmatter intact. Do not implement app source changes, do not modify dream.json, and do not change the dream's status.",
+    "When done, summarize what you changed in the artifacts.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function buildDreamLaunchPrompt(dream: DreamDetail): string {
@@ -462,7 +509,7 @@ class CodexAppServerRpcClient {
     }
   >();
 
-  private constructor(private readonly socket: Socket) {}
+  private constructor(private readonly socket: Socket) { }
 
   static async connect(socketPath: string): Promise<CodexAppServerRpcClient> {
     const socket = createConnection(socketPath);

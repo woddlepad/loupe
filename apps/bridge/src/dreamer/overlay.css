@@ -1,0 +1,85 @@
+/* Compiled by build.mjs into dist/dreamer-overlay.css and fetched lazily by the
+ * dreamer feedback overlay (injected into the LoupeOverlay shadow root + panel
+ * iframe). Tailwind scans core + @loupe/ui TS for the classes used there. */
+@import "@loupe/ui/styles/tokens.css";
+@import "@loupe/ui/styles/fonts.css";
+
+@source "../../../../packages/core/src/**/*.{ts,tsx}";
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
+
+/* The host element should not inherit page styles; Tailwind preflight handles
+ * the rest inside the shadow root. */
+:host {
+  all: initial;
+  font-family: var(--font-sans);
+}
+
+/* Polish animations. Defined as plain CSS so they survive Tailwind's tree-shake
+ * (utility scanning won't see these class names used from generated DOM). */
+@keyframes loupe-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes loupe-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.loupe-animate-panel {
+  animation: loupe-panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: top center;
+}
+
+.loupe-animate-fade {
+  animation: loupe-fade-in 220ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loupe-animate-panel,
+  .loupe-animate-fade {
+    animation: none;
+  }
+}
+
+/* Radix layers (dropdown / select / dialog / popover …) live inside the panel
+ * iframe. Their exit animation never emits `animationend` there — a quirk of
+ * running the React tree inside the iframe — so Radix Presence would keep a
+ * *closed* layer mounted forever. Those lingering layers stack as stale
+ * dismissable layers and break outside-click / Escape dismissal for the next
+ * menu that opens. Neutralise the close animation so closed content unmounts
+ * immediately; the open animation (data-state="open") is untouched. */
+[data-slot="dropdown-menu-content"][data-state="closed"],
+[data-slot="select-content"][data-state="closed"],
+[data-slot="context-menu-content"][data-state="closed"],
+[data-slot="menubar-content"][data-state="closed"],
+[data-slot="popover-content"][data-state="closed"],
+[data-slot="dialog-content"][data-state="closed"],
+[data-slot="dialog-overlay"][data-state="closed"] {
+  animation: none !important;
+}
+
+/* Every interactive control inside the overlay/iframe should show the pointer
+ * cursor. Scoped to the injected sheet (shadow root + panel iframe), so it
+ * never leaks to the host page. */
+button:not(:disabled):not([aria-disabled="true"]),
+[role="button"]:not([aria-disabled="true"]),
+[role="menuitem"]:not([aria-disabled="true"]),
+[role="menuitemcheckbox"]:not([aria-disabled="true"]),
+[role="option"]:not([aria-disabled="true"]),
+[role="combobox"],
+[role="tab"],
+summary,
+label[for] {
+  cursor: pointer;
+}

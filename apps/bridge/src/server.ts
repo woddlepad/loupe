@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotation, AnnotatePayload, AnnotationStatus } from "@loupe/core/model";
-import { agentAvailability, runAgentGroup, runDreamAgent } from "./actions/agent.js";
+import { agentAvailability, runAgentGroup, runDreamAgent, runDreamFeedbackAgent } from "./actions/agent.js";
 import { ActionRegistry } from "./actions/registry.js";
 import type { ActionOutcome } from "./actions/types.js";
 import { writeBundle, writeRecordingBundle, writeReference, type WrittenBundle } from "./bundle.js";
@@ -17,7 +17,16 @@ import {
 import { matchingProjects, readProjectRegistry, type LoupeProjectConfig, type RegisteredProject } from "./project.js";
 import { Resolver } from "./resolve/index.js";
 import type { SourceResolution } from "./resolve/index.js";
-import { deleteDream, dreamAssetPath, listDreams, readDream, writeDream, type DreamWriteInput } from "./dreams.js";
+import {
+  deleteDream,
+  dreamAssetPath,
+  listDreams,
+  readDream,
+  writeDream,
+  writeDreamFeedback,
+  type DreamFeedbackInput,
+  type DreamWriteInput,
+} from "./dreams.js";
 import { dreamerHtml } from "./dreamer-ui.js";
 import {
   addAnnotationReference,
@@ -152,6 +161,12 @@ async function handleRequest(
   const dreamReset = path.match(/^\/dreams\/([^/]+)\/reset$/);
   if (method === "POST" && dreamReset) {
     return handleResetDream(res, config, decodeURIComponent(dreamReset[1]!));
+  }
+  const dreamFeedback = path.match(/^\/dreams\/([^/]+)\/feedback$/);
+  if (method === "POST" && dreamFeedback) {
+    return withBody(req, res, (b) =>
+      handleDreamFeedback(config, decodeURIComponent(dreamFeedback[1]!), JSON.parse(b) as DreamFeedbackPayload),
+    );
   }
   const dreamDetail = path.match(/^\/dreams\/([^/]+)$/);
   if (method === "GET" && dreamDetail) {
@@ -608,6 +623,42 @@ async function handleDreamRun(
   return { ok: true, action, detail: outcome.detail, url: outcome.url, dream: readDream(config.repoRoot, id) };
 }
 
+interface DreamFeedbackPayload {
+  feedback?: DreamFeedbackInput;
+  actions?: string[];
+  actionModels?: Record<string, string>;
+}
+
+/**
+ * Persist an anchored feedback capture (always, loupe save-first parity), then
+ * launch any requested agents on it. Deliberately never touches dream.status —
+ * feedback agents run independently of implementation launches.
+ */
+async function handleDreamFeedback(
+  config: BridgeConfig,
+  id: string,
+  body: DreamFeedbackPayload,
+): Promise<{ ok: boolean; path: string; detail?: string }> {
+  if (!body.feedback?.anchor || !body.feedback.tab) throw new Error("missing feedback");
+  const dream = readDream(config.repoRoot, id);
+  if (!dream) throw new Error(`dream ${id} not found`);
+
+  const written = writeDreamFeedback(config.repoRoot, id, body.feedback);
+  console.log(`[loupe] dream "${id}" feedback ${written.relPath}`);
+
+  const details: string[] = [];
+  for (const actionId of (body.actions ?? []).filter((a) => a !== "save")) {
+    const cmd = config.agents[actionId];
+    if (!cmd) throw new Error(`unknown dream agent "${actionId}"`);
+    const logPath = resolve(config.repoRoot, dream.dir, "feedback", `agent-${actionId}-${written.id}.log`);
+    const outcome = await runDreamFeedbackAgent(actionId, cmd, config, dream, written, logPath, body.actionModels?.[actionId]);
+    console.log(`[loupe] dream "${id}" feedback ${written.id} → ${actionId}: ${outcome.detail ?? (outcome.ok ? "ok" : "failed")}`);
+    if (!outcome.ok) return { ok: false, path: written.relPath, detail: outcome.detail };
+    details.push(outcome.detail ?? `launched ${actionId}`);
+  }
+  return { ok: true, path: written.relPath, detail: details.join(" · ") || `saved feedback → ${written.relPath}` };
+}
+
 function handleResetDream(res: ServerResponse, config: BridgeConfig, id: string): void {
   const dream = readDream(config.repoRoot, id);
   if (!dream) return json(res, 404, { ok: false, error: `dream ${id} not found` });
@@ -835,7 +886,7 @@ function serveDreamAsset(res: ServerResponse, repoRoot: string, id: string, rel:
 }
 
 function serveDreamerAsset(res: ServerResponse, name: string): void {
-  if (name !== "dreamer.js" && name !== "dreamer.css") return end(res, 404, "");
+  if (name !== "dreamer.js" && name !== "dreamer.css" && name !== "dreamer-overlay.css") return end(res, 404, "");
   const abs = join(BRIDGE_DIST_DIR, name);
   if (!existsSync(abs)) return end(res, 404, "");
   res.writeHead(200, {
