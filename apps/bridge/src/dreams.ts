@@ -10,7 +10,7 @@ const PROTOTYPE_HTML = "prototype.html";
 const REPORT_FILE = "report.md";
 // Subdirectory for anchored feedback captures; invisible to dreamFiles()/tabs.
 const FEEDBACK_DIR = "feedback";
-export const MAX_DREAM_GOAL_CHARS = 4000;
+export const MAX_DREAM_GOAL_CHARS = 3000;
 
 export type DreamStatus = "planned" | "approved" | "running" | "needs_review" | "done";
 

@@ -66,8 +66,8 @@ test("rejects goals over the launch limit", () => {
   const repo = mkdtempSync(join(tmpdir(), "loupe-dream-limit-"));
   try {
     assert.throws(
-      () => writeDream(repo, { title: "Oversized", goal: "x".repeat(4001) }),
-      /goal is limited to 4000 characters/,
+      () => writeDream(repo, { title: "Oversized", goal: "x".repeat(3001) }),
+      /goal is limited to 3000 characters/,
     );
   } finally {
     rmSync(repo, { recursive: true, force: true });

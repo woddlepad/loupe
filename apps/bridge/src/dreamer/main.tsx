@@ -170,7 +170,7 @@ interface FeedbackInput {
 // to the dream content pane on the top document.
 type FeedbackScope = "prototype" | "content";
 
-const MAX_GOAL_CHARS = 4000;
+const MAX_GOAL_CHARS = 3000;
 
 const PLAN_FILTER_OPTIONS: { label: string; value: PlanFilter }[] = [
   { label: "All plans", value: "all" },

@@ -14,7 +14,7 @@ Create a read-only implementation plan under `.loupe/dreams/<slug>/` so Loupe Dr
 - Do not edit product source files while using this skill. This is a planning artifact only.
 - Research the repo first. Name real files, modules, commands, data models, routes, and risks.
 - Treat BuilderIO `visual-plan` as the plan shape: MDX document, optional canvas/prototype, repo anchors, implementation sequence, verification, open questions.
-- Keep `dream.json.goal` at or below 4000 characters. If the user's goal is longer, summarize it before writing.
+- Keep `dream.json.goal` at or below 3000 characters. If the user's goal is longer, summarize it before writing.
 - Prefer backend, data, harness, integration, and UX-flow mapping work when proposing overnight agent tasks, but still specify the best shippable UI behavior where UI is involved.
 - The final plan must be specific enough for an agent to execute without reinterpretation.
 
@@ -38,7 +38,7 @@ Write these files:
 {
   "id": "<slug>",
   "title": "Concise title",
-  "goal": "Goal prompt, max 4000 characters",
+  "goal": "Goal prompt, max 3000 characters",
   "summary": "One or two sentence human summary",
   "status": "planned",
   "priority": 1,
