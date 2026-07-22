@@ -8,7 +8,7 @@
     "loupe": "./dist/loupe.js"
   },
   "scripts": {
-    "build": "node src/dreamer/build.mjs && esbuild src/dreamer/main.tsx --bundle --platform=browser --format=esm --target=chrome120 --outfile=dist/dreamer.js --define:process.env.NODE_ENV=\\\"production\\\" && esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --banner:js=\"import{createRequire}from'node:module';const require=createRequire(import.meta.url);\" && esbuild src/loupe.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/loupe.js --banner:js=\"import{createRequire}from'node:module';const require=createRequire(import.meta.url);\" && chmod +x dist/cli.js dist/loupe.js",
+    "build": "node src/dreamer/build.mjs && esbuild src/dreamer/main.tsx --bundle --platform=browser --format=esm --target=chrome120 --outfile=dist/dreamer.js --define:process.env.NODE_ENV=\\\"production\\\" && esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --banner:js=\"import{createRequire}from'node:module';const require=createRequire(import.meta.url);\" && esbuild src/loupe.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/loupe.js --external:playwright --banner:js=\"import{createRequire}from'node:module';const require=createRequire(import.meta.url);\" && chmod +x dist/cli.js dist/loupe.js",
     "start": "pnpm build && node dist/cli.js",
     "dev": "node --import tsx src/cli.ts",
     "type-check": "tsc --noEmit",
@@ -19,6 +19,7 @@
     "@loupe/ui": "workspace:*",
     "lucide-react": "^1.21.0",
     "mermaid": "^11.16.0",
+    "playwright": "^1.61.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",

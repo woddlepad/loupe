@@ -22,8 +22,9 @@ export interface ViteLikePlugin {
 }
 
 const LOUPE_SOURCE_PROP = "__loupeSource";
-const COMPONENT_EXT_RE = /\.[cm]?[jt]sx?$/;
+const COMPONENT_EXT_RE = /\.[jt]sx$/;
 const TEST_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
+const STORY_RE = /\.stories\.[cm]?[jt]sx?$/;
 
 export default function loupe(options: LoupeVitePluginOptions = {}): ViteLikePlugin {
   let root = normalizeRoot(options.root ?? process.cwd());
@@ -122,7 +123,7 @@ function sourceAssignment(name: string, sourcePath: string): string {
 }
 
 function shouldTransform(file: string, root: string, options: LoupeVitePluginOptions): boolean {
-  if (!COMPONENT_EXT_RE.test(file) || TEST_RE.test(file) || file.includes("/node_modules/")) return false;
+  if (!COMPONENT_EXT_RE.test(file) || TEST_RE.test(file) || STORY_RE.test(file) || file.includes("/node_modules/")) return false;
   if (options.exclude?.some((pattern) => pathMatches(file, root, pattern))) return false;
   if (options.include?.length) return options.include.some((pattern) => pathMatches(file, root, pattern));
   return file.startsWith(root + path.sep);

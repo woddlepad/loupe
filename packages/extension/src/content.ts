@@ -101,7 +101,7 @@ function handleOverlayDisabled(): void {
 async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: { freeze?: boolean } = {}): Promise<void> {
   const settings = await loadSettings();
   freezeBackdrop = options.freeze ?? settings.freezeByDefault;
-  frozenScreenshotDataUrl = null;
+  frozenScreenshotDataUrl = freezeBackdrop ? await captureFrozenBackdrop() : null;
   bridgeUrl = bridgeUrlForUrl(settings, location.href);
   activeRepoRoot = settings.activeRepoRoot ?? "";
   const routedOrigins = settings.bridgeRoutes.flatMap((route) => route.origins);
@@ -112,7 +112,8 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: 
     overlay = new LoupeOverlay({
       mode: "reference",
       stylesheet: overlayCss,
-      freezeScope: settings.freezeScope,
+      frozenScreenshotUrl: frozenScreenshotDataUrl,
+      freezeScope: freezeBackdrop ? "screen" : settings.freezeScope,
       generateId: newId,
       onSelectionCapture: captureSelectionForEditing,
       draft: restoreDraft,
@@ -135,7 +136,8 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: 
       library,
       resolveLibraryImage,
       stylesheet: overlayCss,
-      freezeScope: settings.freezeScope,
+      frozenScreenshotUrl: frozenScreenshotDataUrl,
+      freezeScope: freezeBackdrop ? "screen" : settings.freezeScope,
       generateId: newId,
       captureTarget: captureTargetWithPageFrameworks,
       onSelectionCapture: captureSelectionForEditing,
@@ -148,6 +150,17 @@ async function startAnnotating(draft: LoupeOverlayDraft | null = null, options: 
     });
   }
   overlay.enable();
+}
+
+async function captureFrozenBackdrop(): Promise<string | null> {
+  try {
+    const shot = (await chrome.runtime.sendMessage({ type: "capture-visible" } satisfies LoupeMessage)) as CaptureResult;
+    if (!shot.ok) throw new Error(shot.error);
+    return shot.dataUrl;
+  } catch (error) {
+    console.warn("[loupe] could not freeze the visible tab", error);
+    return null;
+  }
 }
 
 function toggleView(): void {

@@ -60,6 +60,7 @@ loupe init --origin staging.acme.com --port 5174
 1. Resolve the requested annotation or group with `loupe show <group|annotation_id>`; use `loupe_context.py` only as a fallback.
 2. Inspect each screenshot and reference image. In Codex, use image viewing tools when available. In other agents, open the absolute paths shown by the script.
 3. Read `note.md` and `meta.json`. Trust the user note first, then use selector, URL, selected text, screenshot, references, and source hints to find the relevant UI code.
+   If `loupe show` reports Storybook metadata, invoke the `storybook-workbench` skill, use the reported story and component source files, and validate the result with `loupe story shot <annotation-id>`.
 4. If `resolution.primary` is empty, infer the source from the URL route, selector/data attributes, visible text, component names, and repo search. Search for stable anchors such as `data-testid`, page route segments, button labels, surrounding text, and class names.
 5. Implement the UI change. Keep scope tight to the annotation.
 6. Run the smallest relevant checks available in the repo.

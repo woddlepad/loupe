@@ -51,6 +51,24 @@ export interface AnnotationTarget {
   elementRect?: Rect;
 }
 
+/** Storybook story metadata resolved by the bridge from the captured page URL. */
+export interface StorybookContext {
+  /** Storybook's stable story id, e.g. "foundations-actions-button--primary". */
+  storyId: string;
+  /** Base URL of the Storybook that published the story. */
+  baseUrl: string;
+  /** Story module path as published by Storybook's index. */
+  storyFile: string;
+  /** Alias retaining Storybook's native index field name. */
+  importPath: string;
+  /** Display name published by Storybook for the indexed story. */
+  name: string;
+  /** Source export name when the Storybook index publishes it. */
+  exportName?: string;
+  /** Repo-relative component source resolved from the capture target. */
+  componentSource?: string;
+}
+
 /** One console call captured while a flow recording is running. */
 export interface ConsoleEntry {
   level: "log" | "info" | "warn" | "error" | "debug";
@@ -162,6 +180,8 @@ export interface Annotation {
   url: string;
   /** Page title at capture time. */
   title: string;
+  /** Present when this annotation was captured from a resolvable Storybook story. */
+  storybook?: StorybookContext;
   /**
    * Short human-readable name for the annotation, shown as its headline in the
    * viewer and used to browse a backlog. Empty at capture time (the viewer falls

@@ -339,7 +339,7 @@ export class LoupeOverlay {
 
   private arm(): void {
     this.phase = "armed";
-    this.setFrozenScreenshot(null);
+    if (this.opts.freezeScope !== "screen") this.setFrozenScreenshot(null);
     this.setInspectCursor(true);
     this.renderArmed();
   }
@@ -348,6 +348,7 @@ export class LoupeOverlay {
     this.moveHostTo(this.doc.body);
     this.clearLayer();
     if (!this.root) return;
+    this.appendFrozenScreenshot();
     const layer = el("div", { class: C.layer });
     layer.style.pointerEvents = "none";
     const inspectBox = el("div", { class: C.inspectBox, "data-loupe-inspect-box": "" });

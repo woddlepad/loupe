@@ -481,6 +481,29 @@ export default {
 See [Custom Actions](./docs/custom-actions.md) for the full action/hook syntax,
 context object, return values, webhook examples, and agent examples.
 
+### Headless Storybook screenshots
+
+Capture a deterministic PNG from a running Storybook using its direct story
+iframe:
+
+```sh
+loupe story shot foundations-actions-button--primary
+loupe story shot <annotation-id> --selector '.button-preview' --output /tmp/button.png
+loupe story open foundations-actions-button--primary --url http://localhost:6206
+```
+
+For an annotation with captured Storybook metadata, Loupe uses its story ID and
+writes `story.png` beside the annotation bundle. Raw story IDs write to
+`.loupe/shots/`. The Storybook URL is resolved from `--url`, annotation
+metadata, `LOUPE_STORYBOOK_URL`, `.loupe/config.json`, then
+`http://localhost:6006`. Configure a repo with either a URL string or object:
+
+```json
+{ "storybook": { "url": "http://localhost:6006" } }
+```
+
+If Chromium is not installed yet, run `pnpm exec playwright install chromium`.
+
 ## Roadmap
 
 - [ ] teammate overlay sync (live, not just git)

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { cpSync, existsSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ import { loadConfig } from "./config.js";
 import { listDreams, readDream } from "./dreams.js";
 import { initProject } from "./project.js";
 import { groupSummaries, listAnnotations, listRecordings, setAnnotationStatus, updateAnnotation, type StoredAnnotation } from "./store.js";
+import { captureStory, resolveStorybookBaseUrl, storybookContext, storyUrl } from "./storybook.js";
 
 const STATUS_VALUES = ["open", "needs_review", "resolved"] as const satisfies readonly AnnotationStatus[];
 
@@ -24,6 +26,7 @@ async function main(): Promise<void> {
   if (cmd === "dream") return dream(args.slice(1));
   if (cmd === "dreamer") return dreamer(args.slice(1));
   if (cmd === "show") return show(args.slice(1));
+  if (cmd === "story") return story(args.slice(1));
   if (cmd === "status") return status(args.slice(1));
   if (cmd === "title") return title(args.slice(1));
   if (cmd === "install-skill") return installSkill();
@@ -165,6 +168,46 @@ function show(args: string[]): void {
   console.log(renderContext(repo, target, matches));
 }
 
+async function story(args: string[]): Promise<void> {
+  const subcommand = args[0];
+  if (subcommand === "open") return openStory(args.slice(1));
+  if (subcommand !== "shot") throw new Error("usage: loupe story <shot|open> <annotation_id|story_id> [options]");
+  const shotArgs = args.slice(1);
+  const target = positionalArgs(shotArgs, ["--url", "--output", "--selector", "--repo"])[0];
+  if (!target) throw new Error("usage: loupe story shot <annotation_id|story_id> [--url <storybook_url>] [--output <path>] [--selector <css>] [--repo <path>]");
+  const repo = repoRoot(shotArgs);
+  const annotation = resolveTarget(repo, target)[0];
+  const result = await captureStory({
+    repoRoot: repo,
+    target,
+    ...(annotation ? { annotation } : {}),
+    ...(strFlag(shotArgs, "--url") ? { baseUrl: strFlag(shotArgs, "--url") } : {}),
+    ...(strFlag(shotArgs, "--output") ? { output: strFlag(shotArgs, "--output") } : {}),
+    ...(strFlag(shotArgs, "--selector") ? { selector: strFlag(shotArgs, "--selector") } : {}),
+  });
+  if (hasFlag(shotArgs, "--json")) console.log(JSON.stringify(result, null, 2));
+  else {
+    console.log(`Captured Storybook story ${result.storyId}`);
+    console.log(`URL: ${result.url}`);
+    console.log(`Screenshot: ${result.output}`);
+  }
+}
+
+function openStory(args: string[]): void {
+  const target = positionalArgs(args, ["--url", "--repo"])[0];
+  if (!target) throw new Error("usage: loupe story open <annotation_id|story_id> [--url <storybook_url>] [--repo <path>]");
+  const repo = repoRoot(args);
+  const annotation = resolveTarget(repo, target)[0];
+  const context = annotation ? storybookContext(annotation) : undefined;
+  if (annotation && !context) throw new Error(`annotation ${annotation.id} was not captured from a Storybook story`);
+  const url = storyUrl(resolveStorybookBaseUrl(repo, annotation, strFlag(args, "--url")), context?.storyId ?? target);
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const commandArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  const child = spawn(command, commandArgs, { detached: true, stdio: "ignore" });
+  child.unref();
+  console.log(url);
+}
+
 function status(args: string[]): void {
   const id = args.find((arg) => !arg.startsWith("-"));
   if (!id) throw new Error("usage: loupe status <annotation_id> --status open|needs_review|resolved [--author agent:codex] [--repo <path>]");
@@ -240,6 +283,7 @@ function resolveTarget(repo: string, target: string): StoredAnnotation[] {
 }
 
 function renderContext(repo: string, target: string, annotations: StoredAnnotation[]): string {
+  const hasStorybook = annotations.some((annotation) => storybookContext(annotation));
   const lines = [
     `# Loupe task: ${target}`,
     "",
@@ -249,6 +293,7 @@ function renderContext(repo: string, target: string, annotations: StoredAnnotati
     "## Agent instructions",
     "",
     "- Implement the requested UI change(s) in this repo.",
+    ...(hasStorybook ? ["- Use the `storybook-workbench` skill for these Storybook annotations.", "- Use `loupe story shot <id>` to capture the rendered story headlessly after editing."] : []),
     "- Inspect every screenshot and reference image listed below before editing.",
     "- Use URL, selector, data attributes, visible text, and source hints to find the code.",
     "- If source is unresolved, search using route segments, data-testid values, labels, selected text, and classes.",
@@ -292,6 +337,7 @@ function renderAnnotation(repo: string, a: StoredAnnotation, index: number): str
   const target = a.target;
   const meta = a as StoredAnnotation & { resolution?: { primary?: string; candidates?: string[]; method?: string } };
   const refs = (a.references ?? []).map((r) => r.file).filter((file): file is string => Boolean(file));
+  const storybook = storybookContext(a);
   return [
     `## ${index}. Annotation \`${a.id}\``,
     "",
@@ -314,6 +360,12 @@ function renderAnnotation(repo: string, a: StoredAnnotation, index: number): str
       : meta.resolution?.candidates?.length
         ? `- Source candidates: \`${meta.resolution.candidates.join(", ")}\``
         : "- Source: unresolved; infer from screenshot, URL, selector, and repo search.",
+    storybook ? `- Storybook story: \`${storybook.storyId}\`` : "",
+    storybook?.exportName ? `- Story export: \`${storybook.exportName}\`` : "",
+    storybook?.storyFile ? `- Story source: \`${resolve(repo, storybook.storyFile)}\`` : "",
+    storybook?.componentSource ? `- Story component source: \`${resolve(repo, storybook.componentSource)}\`` : "",
+    storybook?.baseUrl ? `- Storybook URL: ${storybook.baseUrl}` : "",
+    storybook?.baseUrl ? `- Direct story preview: ${storyUrl(storybook.baseUrl, storybook.storyId)}` : "",
     `- note.md: \`${resolve(dir, "note.md")}\``,
     `- meta.json: \`${resolve(dir, "meta.json")}\``,
     `- screenshot: \`${resolve(dir, "shot.png")}\``,
@@ -409,6 +461,20 @@ function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
 }
 
+function positionalArgs(args: string[], valueFlags: string[]): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (valueFlags.includes(arg)) {
+      if (!args[i + 1] || args[i + 1]!.startsWith("-")) throw new Error(`missing value for ${arg}`);
+      i++;
+    } else if (!arg.startsWith("-")) {
+      values.push(arg);
+    }
+  }
+  return values;
+}
+
 function parseStatus(value: string | undefined): AnnotationStatus | undefined {
   if (!value) return undefined;
   const normalized = value === "needs-review" ? "needs_review" : value;
@@ -427,6 +493,8 @@ Usage:
   loupe dream <dream_id> [--repo <path>] [--json]
   loupe dreamer [--repo <path>] [--port 7337] [--host 127.0.0.1]
   loupe show <group|annotation_id> [--repo <path>] [--json]
+  loupe story shot <annotation_id|story_id> [--url <storybook_url>] [--output <path>] [--selector <css>] [--repo <path>] [--json]
+  loupe story open <annotation_id|story_id> [--url <storybook_url>] [--repo <path>]
   loupe status <annotation_id> --status open|needs_review|resolved [--author agent:codex] [--repo <path>]
   loupe title <annotation_id> "<short descriptive title>" [--repo <path>]
   loupe install-skill

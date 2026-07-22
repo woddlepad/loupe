@@ -27,6 +27,7 @@ import {
   type DreamFeedbackInput,
   type DreamWriteInput,
 } from "./dreams.js";
+import { resolveStorybookContext } from "./storybook.js";
 import { dreamerHtml } from "./dreamer-ui.js";
 import {
   addAnnotationReference,
@@ -460,11 +461,14 @@ async function handleAnnotate(
   registry: ActionRegistry,
   payload: AnnotatePayload,
 ) {
-  const { annotation, actions, actionModels, actionSettings } = payload;
+  const { annotation: capturedAnnotation, actions, actionModels, actionSettings } = payload;
+  let annotation = capturedAnnotation;
   if (!annotation?.id) throw new Error("missing annotation");
 
   // Always write the committable bundle first, then run the chosen actions.
   const resolution = resolver.resolve(annotation.target);
+  const storybook = await resolveStorybookContext(annotation.url, resolution.primary, fetch, config.project?.origins ?? []);
+  if (storybook) annotation = { ...annotation, storybook };
   const bundle = writeBundle(config.repoRoot, annotation, resolution);
 
   const results: Record<string, ActionOutcome> = {};
@@ -512,12 +516,15 @@ async function handleRecord(
   registry: ActionRegistry,
   payload: AnnotatePayload,
 ) {
-  const { annotation, actions, actionModels, actionSettings } = payload;
+  const { annotation: capturedAnnotation, actions, actionModels, actionSettings } = payload;
+  let annotation = capturedAnnotation;
   if (!annotation?.id) throw new Error("missing annotation");
   if (annotation.kind !== "recording" || !annotation.recording) throw new Error("missing recording payload");
 
   // A recording has no single element target; resolve best-effort for parity.
   const resolution = resolver.resolve(annotation.target);
+  const storybook = await resolveStorybookContext(annotation.url, resolution.primary, fetch, config.project?.origins ?? []);
+  if (storybook) annotation = { ...annotation, storybook };
   const bundle = writeRecordingBundle(config.repoRoot, annotation, resolution);
 
   const results: Record<string, ActionOutcome> = {};
