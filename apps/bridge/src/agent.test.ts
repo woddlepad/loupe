@@ -68,6 +68,16 @@ test("expands selected speed into Codex config argv", () => {
   );
 });
 
+test("defaults Claude to Opus 5 and offers the current Claude lineup", () => {
+  const claude = defaultAgents().claude;
+  assert.equal(claude?.defaultModel, "claude-opus-5");
+  assert.deepEqual(claude?.models?.map((model) => model.id), ["claude-opus-5", "fable", "sonnet", "claude-opus-4-8"]);
+  assert.deepEqual(
+    expandAgentArgv(claude!, "inline prompt", "/loupe dde8f08a", undefined, [], process.cwd(), claude!.defaultModel),
+    ["claude", "--model", "claude-opus-5", "--permission-mode", "auto", "--bg", "/loupe dde8f08a"],
+  );
+});
+
 test("expands Codex image args and inline prompt", () => {
   const cmd: AgentCommand = { mode: "spawn", argv: ["codex", "exec", "{imageArgs}", "{prompt}"] };
   assert.deepEqual(expandAgentArgv(cmd, "fix it", "/loupe notes", undefined, ["shot.png", "ref.png"]), [

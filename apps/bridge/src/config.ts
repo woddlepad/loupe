@@ -123,7 +123,7 @@ export function defaultAgents(): Record<string, AgentCommand> {
       mode: "spawn",
       argv: ["claude", "--permission-mode", "auto", "--bg", "{loupeCommand}"],
       models: claudeModels(),
-      defaultModel: "fable",
+      defaultModel: "claude-opus-5",
     },
     // Codex: prefer the app-server when the Desktop socket is available so
     // background handoffs appear in the Codex app; otherwise fall back to the
@@ -140,11 +140,14 @@ export function defaultAgents(): Record<string, AgentCommand> {
   };
 }
 
+// The Opus entries use full model ids rather than the `opus` alias: the alias
+// tracks whatever Opus is newest, so a pinned id keeps the label honest.
 function claudeModels(): ActionModelOption[] {
   return [
-    { id: "fable", label: "Fable 5", hint: "latest Claude coding model" },
-    { id: "sonnet", label: "Sonnet 5", hint: "balanced default" },
-    { id: "opus", label: "Opus 4.8", hint: "deep reasoning" },
+    { id: "claude-opus-5", label: "Opus 5", hint: "agentic coding default" },
+    { id: "fable", label: "Fable 5", hint: "most capable, highest cost" },
+    { id: "sonnet", label: "Sonnet 5", hint: "balanced speed and cost" },
+    { id: "claude-opus-4-8", label: "Opus 4.8", hint: "previous Opus" },
   ];
 }
 
