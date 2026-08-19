@@ -96,10 +96,23 @@ Use this when the plan benefits from visual navigation:
 
 ## After Writing
 
-Tell the user the dream id and that it will appear at:
+Tell the user the dream id and the Dreamer URL of the bridge serving **this** repo.
+`7337` is only the default, and one bridge per worktree on its own port is a normal
+setup — so resolve the port instead of assuming it:
+
+```sh
+for pid in $(pgrep -f 'loupe (bridge|dreamer)'); do
+  printf '%s | %s\n' "$(ps -o command= -p "$pid")" \
+    "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+done
+```
+
+Pick the row whose `--repo` (or, absent that flag, whose cwd) is this repo, and read
+its `--port`; no `--port` flag means the 7337 default. Note `pgrep -a` is Linux-only —
+on macOS the command above is what works. The URL is then:
 
 ```text
-http://localhost:7337/dreamer
+http://localhost:<bridge-port>/dreamer
 ```
 
 Use `loupe dream <id>` to inspect the generated artifact from the terminal.
