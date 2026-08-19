@@ -4,6 +4,7 @@ import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -221,6 +222,7 @@ function App() {
   const [repoRoot, setRepoRoot] = React.useState(repoRootParam ?? "");
   const [plans, setPlans] = React.useState<DreamSummary[]>([]);
   const [details, setDetails] = React.useState<Record<string, DreamDetail>>({});
+  const [detailErrors, setDetailErrors] = React.useState<Record<string, string>>({});
   const [actions, setActions] = React.useState<ActionDescriptor[]>([]);
   const [selectedPlanId, setSelectedPlanId] = React.useState("");
   const [selectedReportId, setSelectedReportId] = React.useState("");
@@ -246,6 +248,7 @@ function App() {
     [plans, selectedPlanId],
   );
   const selectedDetail = selectedPlan ? details[selectedPlan.id] : undefined;
+  const selectedDetailError = selectedPlan ? detailErrors[selectedPlan.id] : undefined;
   const activeDraft = draft ?? (selectedPlan ? draftFromDream(selectedPlan, selectedDetail, repoRoot) : null);
   const isEditing = Boolean(draft);
   const reports = React.useMemo(
@@ -332,9 +335,19 @@ function App() {
   }
 
   async function loadDetail(id: string): Promise<DreamDetail> {
-    const detail = await fetchJson<DreamDetail>(`/dreams/${encodeURIComponent(id)}`);
-    setDetails((current) => ({ ...current, [id]: detail }));
-    return detail;
+    try {
+      const detail = await fetchJson<DreamDetail>(`/dreams/${encodeURIComponent(id)}`);
+      setDetails((current) => ({ ...current, [id]: detail }));
+      setDetailErrors((current) => {
+        if (!current[id]) return current;
+        const { [id]: _removed, ...rest } = current;
+        return rest;
+      });
+      return detail;
+    } catch (error) {
+      setDetailErrors((current) => ({ ...current, [id]: error instanceof Error ? error.message : String(error) }));
+      throw error;
+    }
   }
 
   function mergeDream(dream: DreamDetail | DreamSummary) {
@@ -803,6 +816,12 @@ function App() {
                         prototypeIframeRef={prototypeIframeRef}
                         repoRootParam={repoRootParam}
                         tab={activeVisualTab}
+                      />
+                    ) : selectedDetailError ? (
+                      <EmptyState
+                        icon={AlertTriangle}
+                        message={`${selectedDetailError} — check .loupe/dreams/${selectedPlan?.id ?? ""} in ${repoRoot}.`}
+                        title="Could not load this plan"
                       />
                     ) : (
                       <PlanMarkdown markdown="Loading plan..." />

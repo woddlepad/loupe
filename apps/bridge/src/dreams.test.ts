@@ -62,6 +62,25 @@ test("falls back to plan.mdx frontmatter when dream.json is absent", () => {
   }
 });
 
+test("ignores a dream.json id that disagrees with its directory", () => {
+  const repo = mkdtempSync(join(tmpdir(), "loupe-dream-id-"));
+  try {
+    const dir = join(repo, ".loupe/dreams/inbox-redesign");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "dream.json"),
+      JSON.stringify({ id: "2026-07-27-inbox-redesign", title: "Inbox redesign", status: "planned" }),
+    );
+    writeFileSync(join(dir, "plan.mdx"), "# Inbox redesign\n");
+
+    const dreams = listDreams(repo);
+    assert.equal(dreams[0]?.id, "inbox-redesign");
+    assert.equal(readDream(repo, dreams[0]!.id)?.content.plan, "# Inbox redesign\n");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("rejects goals over the launch limit", () => {
   const repo = mkdtempSync(join(tmpdir(), "loupe-dream-limit-"));
   try {

@@ -309,7 +309,7 @@ function tabTitle(tab: DreamFeedbackTab): string {
 function readDreamSummary(repoRoot: string, id: string): DreamSummary | undefined {
   const dir = safeDreamPath(repoRoot, id);
   if (!dir || !existsSync(dir)) return undefined;
-  const meta = readDreamMeta(dir, id);
+  const meta = readDreamMeta(dir, basename(dir));
   if (!meta) return undefined;
   const files = dreamFiles(dir);
   return {
@@ -319,17 +319,17 @@ function readDreamSummary(repoRoot: string, id: string): DreamSummary | undefine
   };
 }
 
-function readDreamMeta(absDir: string, fallbackId: string): DreamMeta | undefined {
+/** `dirSlug` is the dream's identity: every by-id lookup resolves back to this directory. */
+function readDreamMeta(absDir: string, dirSlug: string): DreamMeta | undefined {
   const meta = readJsonMeta(join(absDir, META_FILE));
-  if (meta) return normalizeMeta(meta, fallbackId);
+  if (meta) return normalizeMeta(meta, dirSlug);
   const plan = readOptionalText(join(absDir, PLAN_FILE));
   if (!plan) return undefined;
   const frontmatter = parseFrontmatter(plan);
   const statTime = new Date(0).toISOString();
   return normalizeMeta(
     {
-      id: fallbackId,
-      title: frontmatter.title ?? titleFromSlug(fallbackId),
+      title: frontmatter.title ?? titleFromSlug(dirSlug),
       summary: frontmatter.summary,
       goal: frontmatter.goal,
       priority: numberFrom(frontmatter.priority),
@@ -340,12 +340,14 @@ function readDreamMeta(absDir: string, fallbackId: string): DreamMeta | undefine
       updatedAt: frontmatter.updatedAt ?? statTime,
       visualPlan: { skill: "visual-plan", mode: "local-files" },
     },
-    fallbackId,
+    dirSlug,
   );
 }
 
-function normalizeMeta(meta: Partial<DreamMeta>, fallbackId: string): DreamMeta | undefined {
-  const id = dreamSlug(meta.id ?? fallbackId);
+// A dream.json `id` that disagrees with its directory is ignored — trusting it
+// would list dreams under ids no by-id lookup can resolve.
+function normalizeMeta(meta: Partial<DreamMeta>, dirSlug: string): DreamMeta | undefined {
+  const id = dreamSlug(dirSlug);
   const title = (meta.title ?? titleFromSlug(id)).trim();
   if (!id || !title) return undefined;
   const now = new Date().toISOString();
