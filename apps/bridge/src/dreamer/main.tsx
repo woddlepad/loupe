@@ -528,7 +528,14 @@ function App() {
       const body = prototypeIframeBody(prototypeIframeRef.current);
       if (body) return { root: body, scope: "prototype" };
     }
-    return { root: contentPaneRef.current, scope: "content" };
+    // A fullscreen pane is the only thing that paints, so the overlay has to
+    // mount inside it rather than on the (ancestor) content pane.
+    const pane = contentPaneRef.current;
+    const fullscreenElement = document.fullscreenElement;
+    if (pane && fullscreenElement instanceof HTMLElement && pane.contains(fullscreenElement)) {
+      return { root: fullscreenElement, scope: "content" };
+    }
+    return { root: pane, scope: "content" };
   }
 
   async function submitFeedback(
@@ -811,7 +818,6 @@ function App() {
                     ) : selectedDetail ? (
                       <VisualContent
                         detail={selectedDetail}
-                        feedbackActive={feedbackActive}
                         onFeedbackHotkey={handleFeedbackHotkey}
                         prototypeIframeRef={prototypeIframeRef}
                         repoRootParam={repoRootParam}
@@ -824,7 +830,7 @@ function App() {
                         title="Could not load this plan"
                       />
                     ) : (
-                      <PlanMarkdown markdown="Loading plan..." />
+                      <PlanMarkdown label="plan" markdown="Loading plan..." />
                     )}
                   </div>
                 </div>
@@ -1080,14 +1086,12 @@ function TextField({
 
 function VisualContent({
   detail,
-  feedbackActive,
   onFeedbackHotkey,
   prototypeIframeRef,
   repoRootParam,
   tab,
 }: {
   detail: DreamDetail;
-  feedbackActive: boolean;
   onFeedbackHotkey: () => void;
   prototypeIframeRef: React.RefObject<HTMLIFrameElement | null>;
   repoRootParam: string | undefined;
@@ -1095,7 +1099,7 @@ function VisualContent({
 }) {
   if (tab === "canvas") {
     return (
-      <div className="h-full min-h-0 overflow-auto px-4 py-5 sm:px-6">
+      <ReadingPane label="canvas">
         {detail.content.canvas ? <MarkdownArticle markdown={detail.content.canvas} /> : null}
         {detail.files.images.length ? (
           <div className="grid gap-3 md:grid-cols-2">
@@ -1107,14 +1111,13 @@ function VisualContent({
             ))}
           </div>
         ) : null}
-      </div>
+      </ReadingPane>
     );
   }
   if (tab === "prototype") {
     if (detail.files.prototypeHtml) {
       return (
         <PrototypeFrame
-          feedbackActive={feedbackActive}
           onFeedbackHotkey={onFeedbackHotkey}
           prototypeIframeRef={prototypeIframeRef}
           src={assetUrl(detail.id, detail.files.prototypeHtml, repoRootParam)}
@@ -1122,30 +1125,81 @@ function VisualContent({
         />
       );
     }
-    return <PlanMarkdown markdown={detail.content.prototype ?? ""} />;
+    return <PlanMarkdown label="prototype" markdown={detail.content.prototype ?? ""} />;
   }
-  if (tab === "report") return <PlanMarkdown markdown={detail.content.report ?? ""} />;
-  return <PlanMarkdown markdown={detail.content.plan ?? ""} />;
+  if (tab === "report") return <PlanMarkdown label="report" markdown={detail.content.report ?? ""} />;
+  return <PlanMarkdown label="plan" markdown={detail.content.plan ?? ""} />;
+}
+
+function useFullscreen(ref: React.RefObject<HTMLElement | null>) {
+  const [fullscreen, setFullscreen] = React.useState(false);
+
+  React.useEffect(() => {
+    const update = () => setFullscreen(document.fullscreenElement === ref.current);
+    update();
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, [ref]);
+
+  const toggle = React.useCallback(async () => {
+    const element = ref.current;
+    if (!element) return;
+    if (document.fullscreenElement === element) {
+      await document.exitFullscreen?.();
+      return;
+    }
+    try {
+      await element.requestFullscreen?.();
+    } catch {
+      // Browsers can deny fullscreen when the click did not carry user activation.
+    }
+  }, [ref]);
+
+  return { fullscreen, toggle };
+}
+
+function FullscreenButton({
+  fullscreen,
+  label,
+  onToggle,
+}: {
+  fullscreen: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <Button
+      aria-label={fullscreen ? `Exit ${label} fullscreen` : `View ${label} fullscreen`}
+      className={cn(
+        "dreamer-fullscreen-button",
+        fullscreen ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100",
+      )}
+      onClick={onToggle}
+      size="icon-sm"
+      title={fullscreen ? "Exit fullscreen" : "View fullscreen"}
+      type="button"
+      variant="secondary"
+    >
+      {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+    </Button>
+  );
 }
 
 function PrototypeFrame({
   src,
   title,
-  feedbackActive,
   onFeedbackHotkey,
   prototypeIframeRef,
 }: {
   src: string;
   title: string;
-  feedbackActive: boolean;
   onFeedbackHotkey: () => void;
   prototypeIframeRef: React.RefObject<HTMLIFrameElement | null>;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement>(null);
   const shellRef = React.useRef<HTMLDivElement>(null);
-  const frameClickCleanupRef = React.useRef<(() => void) | null>(null);
   const hotkeyCleanupRef = React.useRef<(() => void) | null>(null);
-  const [fullscreen, setFullscreen] = React.useState(false);
+  const { fullscreen, toggle: toggleFullscreen } = useFullscreen(shellRef);
 
   // Share the iframe element with the feedback overlay's anchor computation.
   const attachFrame = React.useCallback(
@@ -1155,47 +1209,6 @@ function PrototypeFrame({
     },
     [prototypeIframeRef],
   );
-
-  const requestPrototypeFullscreen = React.useCallback(async () => {
-    const shell = shellRef.current;
-    if (!shell || document.fullscreenElement === shell || !shell.requestFullscreen) return;
-    try {
-      await shell.requestFullscreen();
-    } catch {
-      // Browsers can deny fullscreen when the click did not carry user activation.
-    }
-  }, []);
-
-  const togglePrototypeFullscreen = React.useCallback(async () => {
-    if (document.fullscreenElement === shellRef.current) {
-      await document.exitFullscreen?.();
-      return;
-    }
-    await requestPrototypeFullscreen();
-  }, [requestPrototypeFullscreen]);
-
-  const connectFrameClick = React.useCallback(() => {
-    // While a correction is armed the overlay runs inside this iframe and owns
-    // clicks (element picking) — don't also toggle fullscreen on them.
-    if (feedbackActive) return undefined;
-    const frame = frameRef.current;
-    let frameDocument: Document | null | undefined;
-    try {
-      frameDocument = frame?.contentDocument;
-    } catch {
-      frameDocument = null;
-    }
-    if (!frameDocument) return undefined;
-    frameClickCleanupRef.current?.();
-
-    const onClick = () => {
-      void requestPrototypeFullscreen();
-    };
-    frameDocument.addEventListener("click", onClick, true);
-    const cleanup = () => frameDocument.removeEventListener("click", onClick, true);
-    frameClickCleanupRef.current = cleanup;
-    return cleanup;
-  }, [requestPrototypeFullscreen, feedbackActive]);
 
   // Alt+A fires on the iframe's own window while focus is inside the prototype
   // (notably in fullscreen, where the top window never sees it).
@@ -1224,69 +1237,52 @@ function PrototypeFrame({
   }, [onFeedbackHotkey]);
 
   React.useEffect(() => {
-    // Re-run when feedback arms/disarms so the fullscreen click handler detaches
-    // while armed and reattaches after.
-    frameClickCleanupRef.current?.();
-    frameClickCleanupRef.current = null;
-    connectFrameClick();
     connectHotkey();
     return () => {
-      frameClickCleanupRef.current?.();
-      frameClickCleanupRef.current = null;
       hotkeyCleanupRef.current?.();
       hotkeyCleanupRef.current = null;
     };
-  }, [connectFrameClick, connectHotkey, src]);
-
-  React.useEffect(() => {
-    const updateFullscreen = () => setFullscreen(document.fullscreenElement === shellRef.current);
-    updateFullscreen();
-    document.addEventListener("fullscreenchange", updateFullscreen);
-    return () => document.removeEventListener("fullscreenchange", updateFullscreen);
-  }, []);
+  }, [connectHotkey, src]);
 
   return (
     <div className="dreamer-prototype-shell group" ref={shellRef}>
       <iframe
         allowFullScreen
         className="dreamer-prototype-frame"
-        onLoad={() => {
-          connectFrameClick();
-          connectHotkey();
-        }}
+        onLoad={connectHotkey}
         ref={attachFrame}
         src={src}
         title={title}
       />
-      <Button
-        aria-label={fullscreen ? "Exit prototype fullscreen" : "View prototype fullscreen"}
-        className={cn(
-          "dreamer-prototype-fullscreen-button",
-          fullscreen ? "opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100",
-        )}
-        onClick={() => void togglePrototypeFullscreen()}
-        size="icon-sm"
-        title={fullscreen ? "Exit fullscreen" : "View fullscreen"}
-        type="button"
-        variant="secondary"
-      >
-        {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-      </Button>
+      <FullscreenButton fullscreen={fullscreen} label="prototype" onToggle={() => void toggleFullscreen()} />
     </div>
   );
 }
 
-function PlanMarkdown({ markdown }: { markdown: string }) {
+/** Scrolling pane with its own fullscreen toggle, for the read-only tabs. */
+function ReadingPane({ children, label }: { children: React.ReactNode; label: string }) {
+  const shellRef = React.useRef<HTMLDivElement>(null);
+  const { fullscreen, toggle } = useFullscreen(shellRef);
+
   return (
-    <div className="h-full min-h-0 overflow-auto px-4 py-5 sm:px-6">
-      <MarkdownArticle markdown={markdown} />
+    <div className="dreamer-reading-shell group" ref={shellRef}>
+      <div className="dreamer-reading-scroll h-full min-h-0 overflow-auto px-4 py-5 sm:px-6">{children}</div>
+      <FullscreenButton fullscreen={fullscreen} label={label} onToggle={() => void toggle()} />
     </div>
+  );
+}
+
+function PlanMarkdown({ label, markdown }: { label: string; markdown: string }) {
+  return (
+    <ReadingPane label={label}>
+      <MarkdownArticle markdown={markdown} />
+    </ReadingPane>
   );
 }
 
 function MarkdownArticle({ markdown }: { markdown: string }) {
   return (
-    <article className="markdown-body max-w-none">
+    <article className="markdown-body">
       <ReactMarkdown
         components={{
           code({ className, children, node: _node, ...props }) {

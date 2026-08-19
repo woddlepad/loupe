@@ -176,8 +176,33 @@ button:not(:disabled),
     @apply h-full w-full border-0 bg-white;
   }
 
-  .dreamer-prototype-fullscreen-button {
+  .dreamer-fullscreen-button {
     @apply absolute right-3 top-3 z-10 shadow-lg transition-opacity;
+  }
+
+  .dreamer-reading-shell {
+    @apply relative h-full min-h-0 w-full overflow-hidden;
+  }
+
+  /* Cap the measure in ch so it holds at both type sizes. */
+  .dreamer-reading-scroll>* {
+    margin-inline: auto;
+    max-width: 86ch;
+  }
+
+  .dreamer-reading-shell:fullscreen {
+    width: 100vw;
+    height: 100vh;
+    background: var(--background);
+  }
+
+  /* Fullscreen is for reading: wider gutters, bigger type. */
+  .dreamer-reading-shell:fullscreen .dreamer-reading-scroll {
+    padding: 3rem 2rem;
+  }
+
+  .dreamer-reading-shell:fullscreen .markdown-body {
+    font-size: 1rem;
   }
 
 }
