@@ -11,3 +11,6 @@ artifacts/
 # Loupe's own scratch — note: in a *target* repo, .loupe/ is meant to be
 # committed and shared. This ignore only applies to the Loupe repo itself.
 .loupe/
+
+# Local pnpm store, never part of the repo
+.pnpm-store/
